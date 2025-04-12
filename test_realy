@@ -39,21 +39,28 @@ void loop() {
 
   if (digitalRead(btn2Rak3at) == HIGH) {
     Serial.println("btn 1 clicked");
-    while(digitalRead(btn2Rak3at) == HIGH){ delay(10);}
-    targetRakah = 2;
+    while (digitalRead(btn2Rak3at) == HIGH) { delay(10); }
+    targetRakah = 1;
     resetCounter();
     delay(300);
   }
   if (digitalRead(btn3Rak3at) == HIGH) {
     Serial.println("btn 2 clicked");
-     while(digitalRead(btn3Rak3at) == HIGH){ delay(10);}
-    targetRakah = 3;
+    while (digitalRead(btn3Rak3at) == HIGH) { delay(10); }
+    targetRakah = 2;
     resetCounter();
     delay(300);
   }
   if (digitalRead(btn4Rak3at) == HIGH) {
     Serial.println("btn 3 clicked");
-     while(digitalRead(btn4Rak3at) == HIGH){ delay(10);}
+    while (digitalRead(btn4Rak3at) == HIGH) { delay(10); }
+    targetRakah = 3;
+    resetCounter();
+    delay(300);
+  }
+  if (digitalRead(resetButton) == HIGH) {
+    Serial.println("btn 4 clicked");
+    while (digitalRead(btn4Rak3at) == HIGH) { delay(10); }
     targetRakah = 4;
     resetCounter();
     delay(300);
@@ -74,13 +81,7 @@ void loop() {
   }
 
   if (fsrValue < 100 && inSujood) {
-    inSujood = false; // Reset for next sujood detection
-  }
-
-  if (digitalRead(resetButton) == HIGH) {
-    while(digitalRead(resetButton) == HIGH){ delay(10);}
-    resetCounter();
-    delay(300);
+    inSujood = false;  // Reset for next sujood detection
   }
 }
 
