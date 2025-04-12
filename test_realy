@@ -1,104 +1,92 @@
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
+#include <DHT.h>
 
+#define DHTPIN 2  // DHT11 data pin
+#define DHTTYPE DHT11
+#define FAN_RELAY 3    // Relay for fan
+#define WATER_PUMP 4   // Relay for water pump
+#define NOZZLE_PUMP 5  // Relay for nozzle pump
+#define BUTTON_FAN 6   // Manual button for fan
+#define BUTTON_PUMP 7  // Manual button for pumps
+
+DHT dht(DHTPIN, DHTTYPE);
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
-const int fsrPin = A0;
-const int buzzerPin = 9;
-const int ledPin = 8;
-
-const int btn2Rak3at = 4;
-const int btn3Rak3at = 5;
-
-int sujoodCount = 0;
-int rakahCount = 0;
-int targetRakah = 1;
-bool inSujood = false;
+bool fanState = false;
+bool pumpState = false;
+bool nozzleState = false;
 
 void setup() {
-  pinMode(fsrPin, INPUT);
-  pinMode(buzzerPin, OUTPUT);
-  pinMode(ledPin, OUTPUT);
-
-  pinMode(btn2Rak3at, INPUT);
-  pinMode(btn3Rak3at, INPUT);
+  pinMode(FAN_RELAY, OUTPUT);
+  pinMode(WATER_PUMP, OUTPUT);
+  pinMode(NOZZLE_PUMP, OUTPUT);
+  pinMode(BUTTON_FAN, INPUT_PULLUP);
+  pinMode(BUTTON_PUMP, INPUT_PULLUP);
 
   lcd.init();
   lcd.backlight();
-  lcd.setCursor(0, 0);
-  lcd.print("Rak'ah Counter");
-  delay(2000);
-  lcd.clear();
-  displayStatus();
-  Serial.begin(9600);
+  dht.begin();
 }
 
 void loop() {
+  float temp = dht.readTemperature();
+  float humidity = dht.readHumidity();
 
-  if (digitalRead(btn2Rak3at) == HIGH) {
-    Serial.println("btn +");
-    while (digitalRead(btn2Rak3at) == HIGH) { delay(10); }
-    targetRakah += 1;
-    resetCounter();
-    delay(300);
-  }
-  if (digitalRead(btn3Rak3at) == HIGH) {
-    Serial.println("btn -");
-    while (digitalRead(btn3Rak3at) == HIGH) { delay(10); }
-    targetRakah -= 1;
-    if (targetRakah < 1) {
-      targetRakah = 1;
-    }
-    resetCounter();
-    delay(300);
+  if (isnan(temp) || isnan(humidity)) {
+    lcd.setCursor(0, 0);
+    lcd.print("Sensor Error");
+    delay(1000);
   }
 
-
-  int fsrValue = analogRead(fsrPin);
-
-  if (fsrValue > 100 && !inSujood) {
-    inSujood = true;
-    sujoodCount++;
-
-    if (sujoodCount % 2 == 0) {
-      rakahCount++;
-      displayStatus();
-      checkIfDone();
-    }
-    delay(500);  // Debounce delay
+  // Automatic Control
+  if (temp > 30) {
+    digitalWrite(FAN_RELAY, HIGH);
+    fanState = true;
+  } else {
+    digitalWrite(FAN_RELAY, LOW);
+    fanState = false;
   }
 
-  if (fsrValue < 100 && inSujood) {
-    inSujood = false;  // Reset for next sujood detection
+  if (humidity < 40) {
+    digitalWrite(NOZZLE_PUMP, HIGH);
+    nozzleState = true;
+  } else {
+    digitalWrite(NOZZLE_PUMP, LOW);
+    nozzleState = false;
   }
-}
 
-void displayStatus() {
+  // Manual Control via Buttons
+  if (digitalRead(BUTTON_FAN) == HIGH) {
+    while(digitalRead(BUTTON_FAN) == HIGH){ delay(10);}
+    fanState = !fanState;
+    digitalWrite(FAN_RELAY, fanState ? HIGH : LOW);
+    delay(300);  // Debounce
+  }
+
+  if (digitalRead(BUTTON_PUMP) == HIGH) {
+    while(digitalRead(BUTTON_PUMP) == HIGH){ delay(10);}
+    pumpState = !pumpState;
+    digitalWrite(WATER_PUMP, pumpState ? HIGH : LOW);
+    delay(300);  // Debounce
+  }
+
+  // LCD Display
   lcd.clear();
   lcd.setCursor(0, 0);
-  lcd.print("Rak'ah: ");
-  lcd.print(rakahCount);
+  lcd.print("T:");
+  lcd.print(temp);
+  lcd.print("C H:");
+  lcd.print(humidity);
+  lcd.print("%");
+
   lcd.setCursor(0, 1);
-  lcd.print("Target: ");
-  lcd.print(targetRakah);
-}
+  lcd.print("Fan:");
+  lcd.print(fanState ? "ON " : "OFF");
+  lcd.print(" P1:");
+  lcd.print(pumpState ? "ON " : "OFF");
+  lcd.print(" P2:");
+  lcd.print(nozzleState ? "ON" : "OFF");
 
-void checkIfDone() {
-  if (rakahCount >= targetRakah) {
-    digitalWrite(buzzerPin, HIGH);
-    digitalWrite(ledPin, HIGH);
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("Prayer Done :)");
-    delay(3000);
-    digitalWrite(buzzerPin, LOW);
-    digitalWrite(ledPin, LOW);
-    resetCounter();
-  }
-}
-
-void resetCounter() {
-  sujoodCount = 0;
-  rakahCount = 0;
-  displayStatus();
+  delay(1000);  // Refresh rate
 }
