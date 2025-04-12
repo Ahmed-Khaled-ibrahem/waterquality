@@ -1,321 +1,115 @@
 #include <Wire.h>
-#include <DHT.h>
-#include <SoftwareSerial.h>
-#include <Servo.h>
-#include <TinyGPS++.h>
+#include <LiquidCrystal_I2C.h>
 
-#define DHTPIN 2
-#define DHTTYPE DHT22
-DHT dht(DHTPIN, DHTTYPE);
+LiquidCrystal_I2C lcd(0x27, 16, 2);
 
-#define FIRE_SENSOR_1 A0
-#define FIRE_SENSOR_2 A1
-#define FIRE_SENSOR_3 A2
-#define FIRE_SENSOR_4 A3
-#define FIRE_SENSOR_5 A4
-#define TRIG_PIN 3
-#define ECHO_PIN 4
-#define RELAY_PIN 5
-#define SERVO_PIN 6
-#define MOTOR1_IN1 7
-#define MOTOR1_IN2 8
-#define MOTOR2_IN1 9
-#define MOTOR2_IN2 10
-#define GPS_TX 11
-#define GPS_RX 12
-#define SIM800_TX 13
-#define SIM800_RX 14
-#define ESP_CAM_TX 15
-#define ESP_CAM_RX 16  // Using voltage divider with 1kΩ and 2kΩ resistors or equal
+const int fsrPin = A0;
+const int buzzerPin = 9;
+const int ledPin = 8;
+const int resetButton = 7;
+const int btn2Rak3at = 4;
+const int btn3Rak3at = 5;
+const int btn4Rak3at = 6;
 
-SoftwareSerial sim800(SIM800_TX, SIM800_RX);
-SoftwareSerial gpsSerial(GPS_TX, GPS_RX);
-SoftwareSerial espCam(ESP_CAM_TX, ESP_CAM_RX);
-Servo myServo;
-const String phoneNumber = "+1234567890";  // Replace with the target phone number
-String location = "";
-TinyGPSPlus gps;
-
-float temperature = 0;
-float humidity = 0;
-String lastLink = "";
-int fireDetected1 = 0;
-int fireDetected2 = 0;
-int fireDetected3 = 0;
-int fireDetected4 = 0;
-int fireDetected5 = 0;
-int distance = 0;
-int triggerValue = 0;
+int sujoodCount = 0;
+int rakahCount = 0;
+int targetRakah = 2;
+bool inSujood = false;
 
 void setup() {
+  pinMode(fsrPin, INPUT);
+  pinMode(buzzerPin, OUTPUT);
+  pinMode(ledPin, OUTPUT);
+  pinMode(resetButton, INPUT);
+  pinMode(btn2Rak3at, INPUT);
+  pinMode(btn3Rak3at, INPUT);
+  pinMode(btn4Rak3at, INPUT);
+
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("Rak'ah Counter");
+  delay(2000);
+  lcd.clear();
+  displayStatus();
   Serial.begin(9600);
-  dht.begin();
-  pinMode(FIRE_SENSOR_1, INPUT);
-  pinMode(FIRE_SENSOR_2, INPUT);
-  pinMode(FIRE_SENSOR_3, INPUT);
-  pinMode(FIRE_SENSOR_4, INPUT);
-  pinMode(FIRE_SENSOR_5, INPUT);
-  pinMode(TRIG_PIN, OUTPUT);
-  pinMode(ECHO_PIN, INPUT);
-  pinMode(RELAY_PIN, OUTPUT);
-  pinMode(MOTOR1_IN1, OUTPUT);
-  pinMode(MOTOR1_IN2, OUTPUT);
-  pinMode(MOTOR2_IN1, OUTPUT);
-  pinMode(MOTOR2_IN2, OUTPUT);
-
-  myServo.attach(SERVO_PIN);
-  sim800.begin(9600);
-  gpsSerial.begin(9600);
-  espCam.begin(9600);
-
-  testSIM800();
-  digitalWrite(RELAY_PIN, LOW);
 }
 
 void loop() {
 
-  Serial.println("------------------------");
-  Serial.println("------------------------");
-
-  temperature = dht.readTemperature();
-  humidity = dht.readHumidity();
-
-  Serial.print("temperature : ");
-  Serial.println(temperature);
-  Serial.print("humidity : ");
-  Serial.println(humidity);
-  Serial.println("------------------------");
-
-  fireDetected1 = analogRead(FIRE_SENSOR_1);
-  fireDetected2 = analogRead(FIRE_SENSOR_2);
-  fireDetected3 = analogRead(FIRE_SENSOR_3);
-  fireDetected4 = analogRead(FIRE_SENSOR_4);
-  fireDetected5 = analogRead(FIRE_SENSOR_5);
-
-  Serial.print("fire Sensor : ");
-  Serial.print(fireDetected1);
-  Serial.print(", ");
-  Serial.print(fireDetected2);
-  Serial.print(", ");
-  Serial.print(fireDetected3);
-  Serial.print(", ");
-  Serial.print(fireDetected4);
-  Serial.print(", ");
-  Serial.print(fireDetected5);
-  Serial.println(" ");
-  Serial.println("------------------------");
-
-  distance = getUltrasonicDistance();
-  Serial.print("distance : ");
-  Serial.println(distance);
-  Serial.println("------------------------");
-
-  if (distance < 20) {
-    avoidObstacle();
-  } else {
-    moveForward();
+  if (digitalRead(btn2Rak3at) == HIGH) {
+    Serial.println("btn 1 clicked");
+    while(digitalRead(btn2Rak3at) == HIGH){ delay(10);}
+    targetRakah = 2;
+    resetCounter();
+    delay(300);
+  }
+  if (digitalRead(btn3Rak3at) == HIGH) {
+    Serial.println("btn 2 clicked");
+     while(digitalRead(btn3Rak3at) == HIGH){ delay(10);}
+    targetRakah = 3;
+    resetCounter();
+    delay(300);
+  }
+  if (digitalRead(btn4Rak3at) == HIGH) {
+    Serial.println("btn 3 clicked");
+     while(digitalRead(btn4Rak3at) == HIGH){ delay(10);}
+    targetRakah = 4;
+    resetCounter();
+    delay(300);
   }
 
-  if (Serial.available()) {
-    String command = Serial.readStringUntil('\n');  // Read input until newline
-    command.trim();                                 // Remove any whitespace or newlines
+  int fsrValue = analogRead(fsrPin);
 
-    if (command == "fire") {
-      fireDetected1 = 600;
+  if (fsrValue > 100 && !inSujood) {
+    inSujood = true;
+    sujoodCount++;
+
+    if (sujoodCount % 2 == 0) {
+      rakahCount++;
+      displayStatus();
+      checkIfDone();
     }
+    delay(500);  // Debounce delay
   }
 
-  getGPS();
-
-  triggerValue = 300;
-
-  if (fireDetected1 > triggerValue || fireDetected2 > triggerValue || fireDetected3 > triggerValue || fireDetected4 > triggerValue || fireDetected5 > triggerValue || temperature > 50) {
-    Serial.println("Fire detected!");
-    stopMotors();
-
-    int fireValues[5] = { fireDetected1, fireDetected2, fireDetected3, fireDetected4, fireDetected5 };
-    int maxIndex = 0;
-    int maxValue = fireValues[0];
-
-    for (int i = 1; i < 5; i++) {
-      if (fireValues[i] > maxValue) {
-        maxValue = fireValues[i];
-        maxIndex = i;
-      }
-    }
-
-    int servo_angles[5] = { 60, 80, 90, 100, 120 };
-    myServo.write(servo_angles[maxIndex]);
-
-    lastLink = takePhoto();
-
-    String text = getMessage();
-    Serial.println(text);
-    Serial.println("------------------------");
-    sendAlert(text);
-    activateWaterPump();
-    myServo.write(90);
+  if (fsrValue < 100 && inSujood) {
+    inSujood = false; // Reset for next sujood detection
   }
 
-  delay(1000);
-}
-
-void sendAlert(String message) {
-  sim800.println("AT+CMGF=1");
-  delay(200);
-  String commandww = String("AT+CMGS=\"+") + phoneNumber + String("\"");
-  sim800.println(commandww);
-  sim800.print(message);
-  sim800.write(26);
-  delay(200);
-}
-
-String getMessage() {
-  return "Fire detected! \n"
-         "Location : "
-         + String(getGPS()) + "\n"
-                              "Temperature : "
-         + String(temperature) + "\n"
-                                 "Humidity : "
-         + String(humidity) + "\n"
-                              "Photo Link : "
-         + "https://xakahklkfirpoanswpep.supabase.co/storage/v1/object/public/firecar//" + lastLink + ".jpg";
-}
-
-String getGPS() {
-
-  while (gpsSerial.available() > 0) {
-    gps.encode(gpsSerial.read());
-  }
-
-  if (gps.location.isUpdated()) {
-    Serial.print("LAT: ");
-    Serial.println(gps.location.lat(), 6);
-    Serial.print("LONG: ");
-    Serial.println(gps.location.lng(), 6);
-    Serial.print("SPEED (km/h) = ");
-    Serial.println(gps.speed.kmph());
-    Serial.print("Satellites = ");
-    Serial.println(gps.satellites.value());
-    Serial.print("Time in UTC: ");
-    Serial.println(String(gps.date.year()) + "/" + String(gps.date.month()) + "/" + String(gps.date.day()) + "," + String(gps.time.hour()) + ":" + String(gps.time.minute()) + ":" + String(gps.time.second()));
-    Serial.println("");
-
-    location = String(gps.location.lat()) + "  " + String(gps.location.lng());
-  }
-
-  return location;
-}
-
-String takePhoto() {
-
-  String str_id = "0";
-
-  Serial.println("Capturing Photo...");
-  espCam.flush();
-  espCam.readString();
-  espCam.println("CAPTURE");
-  delay(1500);
-
-  if (espCam.available()) {
-    String response = espCam.readString();
-    int index = response.indexOf("img_id_to_upload");
-    String newz = response.substring(index + 16);
-    Serial.println(newz);
-    str_id = newz;
-  }
-
-  return str_id;
-}
-
-void activateWaterPump() {
-  Serial.println("pump is runninig");
-  digitalWrite(RELAY_PIN, HIGH);
-  delay(5000);
-  digitalWrite(RELAY_PIN, LOW);
-}
-
-void moveForward() {
-  digitalWrite(MOTOR1_IN1, HIGH);
-  digitalWrite(MOTOR1_IN2, LOW);
-  digitalWrite(MOTOR2_IN1, HIGH);
-  digitalWrite(MOTOR2_IN2, LOW);
-}
-
-void stopMotors() {
-  digitalWrite(MOTOR1_IN1, LOW);
-  digitalWrite(MOTOR1_IN2, LOW);
-  digitalWrite(MOTOR2_IN1, LOW);
-  digitalWrite(MOTOR2_IN2, LOW);
-}
-
-int getUltrasonicDistance() {
-  long duration;
-  digitalWrite(TRIG_PIN, LOW);
-  delayMicroseconds(2);
-  digitalWrite(TRIG_PIN, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(TRIG_PIN, LOW);
-  duration = pulseIn(ECHO_PIN, HIGH);
-  return duration * 0.034 / 2;
-}
-
-void avoidObstacle() {
-  Serial.println("Obstacle detected! Avoiding...");
-  stopMotors();
-  delay(500);
-  myServo.write(0);
-  delay(500);
-  int leftDistance = getUltrasonicDistance();
-  myServo.write(180);
-  delay(500);
-  int rightDistance = getUltrasonicDistance();
-  myServo.write(90);
-
-  if (leftDistance > rightDistance) {
-    turnLeft();
-  } else {
-    turnRight();
+  if (digitalRead(resetButton) == HIGH) {
+    while(digitalRead(resetButton) == HIGH){ delay(10);}
+    resetCounter();
+    delay(300);
   }
 }
 
-void turnLeft() {
-  Serial.println("Turning Left");
-  digitalWrite(MOTOR1_IN1, LOW);
-  digitalWrite(MOTOR1_IN2, HIGH);
-  digitalWrite(MOTOR2_IN1, HIGH);
-  digitalWrite(MOTOR2_IN2, LOW);
-  delay(1000);
-  moveForward();
+void displayStatus() {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Rak'ah: ");
+  lcd.print(rakahCount);
+  lcd.setCursor(0, 1);
+  lcd.print("Target: ");
+  lcd.print(targetRakah);
 }
 
-void turnRight() {
-  Serial.println("Turning Right");
-  digitalWrite(MOTOR1_IN1, HIGH);
-  digitalWrite(MOTOR1_IN2, LOW);
-  digitalWrite(MOTOR2_IN1, LOW);
-  digitalWrite(MOTOR2_IN2, HIGH);
-  delay(1000);
-  moveForward();
-}
-
-void testSIM800() {
-  Serial.println("Testing SIM800...");
-  sim800.println("AT");
-  delay(1000);
-  sim800.println("AT");  //Once the handshake test is successful, it will back to OK
-  updateSerial();
-  sim800.println("AT+CSQ");  //Signal quality test, value range is 0-31 , 31 is the best
-  updateSerial();
-  sim800.println("AT+CCID");  //Read SIM information to confirm whether the SIM is plugged
-  updateSerial();
-  sim800.println("AT+CREG?");  //Check whether it has registered in the network
-  updateSerial();
-}
-
-void updateSerial() {
-  delay(500);
-  while (sim800.available()) {
-    Serial.write(sim800.read());  //Forward what Software Serial received to Serial Port
+void checkIfDone() {
+  if (rakahCount >= targetRakah) {
+    digitalWrite(buzzerPin, HIGH);
+    digitalWrite(ledPin, HIGH);
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Prayer Done :)");
+    delay(3000);
+    digitalWrite(buzzerPin, LOW);
+    digitalWrite(ledPin, LOW);
+    resetCounter();
   }
+}
+
+void resetCounter() {
+  sujoodCount = 0;
+  rakahCount = 0;
+  displayStatus();
 }
