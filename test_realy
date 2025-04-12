@@ -6,24 +6,22 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 const int fsrPin = A0;
 const int buzzerPin = 9;
 const int ledPin = 8;
-const int resetButton = 7;
+
 const int btn2Rak3at = 4;
 const int btn3Rak3at = 5;
-const int btn4Rak3at = 6;
 
 int sujoodCount = 0;
 int rakahCount = 0;
-int targetRakah = 2;
+int targetRakah = 1;
 bool inSujood = false;
 
 void setup() {
   pinMode(fsrPin, INPUT);
   pinMode(buzzerPin, OUTPUT);
   pinMode(ledPin, OUTPUT);
-  pinMode(resetButton, INPUT);
+
   pinMode(btn2Rak3at, INPUT);
   pinMode(btn3Rak3at, INPUT);
-  pinMode(btn4Rak3at, INPUT);
 
   lcd.init();
   lcd.backlight();
@@ -38,33 +36,23 @@ void setup() {
 void loop() {
 
   if (digitalRead(btn2Rak3at) == HIGH) {
-    Serial.println("btn 1 clicked");
+    Serial.println("btn +");
     while (digitalRead(btn2Rak3at) == HIGH) { delay(10); }
-    targetRakah = 1;
+    targetRakah += 1;
     resetCounter();
     delay(300);
   }
   if (digitalRead(btn3Rak3at) == HIGH) {
-    Serial.println("btn 2 clicked");
+    Serial.println("btn -");
     while (digitalRead(btn3Rak3at) == HIGH) { delay(10); }
-    targetRakah = 2;
+    targetRakah -= 1;
+    if (targetRakah < 1) {
+      targetRakah = 1;
+    }
     resetCounter();
     delay(300);
   }
-  if (digitalRead(btn4Rak3at) == HIGH) {
-    Serial.println("btn 3 clicked");
-    while (digitalRead(btn4Rak3at) == HIGH) { delay(10); }
-    targetRakah = 3;
-    resetCounter();
-    delay(300);
-  }
-  if (digitalRead(resetButton) == HIGH) {
-    Serial.println("btn 4 clicked");
-    while (digitalRead(btn4Rak3at) == HIGH) { delay(10); }
-    targetRakah = 4;
-    resetCounter();
-    delay(300);
-  }
+
 
   int fsrValue = analogRead(fsrPin);
 
