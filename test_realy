@@ -1,92 +1,132 @@
+#include <WiFi.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
-#include <DHT.h>
 
-#define DHTPIN 2  // DHT11 data pin
-#define DHTTYPE DHT11
-#define FAN_RELAY 3    // Relay for fan
-#define WATER_PUMP 4   // Relay for water pump
-#define NOZZLE_PUMP 5  // Relay for nozzle pump
-#define BUTTON_FAN 6   // Manual button for fan
-#define BUTTON_PUMP 7  // Manual button for pumps
+// Replace these with your Wi-Fi credentials
+const char* ssid = "Ahmed";
+const char* password = "#1288534459&4274321#ahmed";
 
-DHT dht(DHTPIN, DHTTYPE);
-LiquidCrystal_I2C lcd(0x27, 16, 2);
+// set the LCD number of columns and rows
+int lcdColumns = 16;
+int lcdRows = 2;
+LiquidCrystal_I2C lcd(0x27, lcdColumns, lcdRows);
 
-bool fanState = false;
-bool pumpState = false;
-bool nozzleState = false;
+// Create a Wi-Fi server on port 80
+WiFiServer server(80);
+
+// Variable to store incoming text
+String receivedText = "Waiting...";
 
 void setup() {
-  pinMode(FAN_RELAY, OUTPUT);
-  pinMode(WATER_PUMP, OUTPUT);
-  pinMode(NOZZLE_PUMP, OUTPUT);
-  pinMode(BUTTON_FAN, INPUT_PULLUP);
-  pinMode(BUTTON_PUMP, INPUT_PULLUP);
-
+  // Start Serial Monitor
+  Serial.begin(115200);
+  // initialize LCD
   lcd.init();
+  // turn on LCD backlight
   lcd.backlight();
-  dht.begin();
+
+  lcd.setCursor(0, 0);
+  lcd.print("Connecting...");
+
+  // Connect to Wi-Fi
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("WiFi connected.");
+  Serial.println(WiFi.localIP());
+
+  // Display IP address on LCD
+  lcd.clear();
+  lcd.print("IP: ");
+  lcd.print(WiFi.localIP());
+
+  // Start the server
+  server.begin();
+}
+
+void checkClient() {
+
+  // Check if a client has connected
+  WiFiClient client = server.available();
+  if (!client) {
+    return;
+  }
+
+  Serial.println("New client connected.");
+  lcd.clear();
+  lcd.print("Camera Connected");
+  String currentLine = "";
+
+  while (client.connected()) {
+    if (client.available()) {
+      char c = client.read();
+      
+      // Serial.write(c);
+
+      if (c == '\n') {
+        // Handle HTTP GET request
+        if (currentLine.length() == 0) {
+          // Send HTTP header
+          client.println("HTTP/1.1 200 OK");
+          client.println("Content-type:text/html");
+          client.println();
+
+          // Send HTML form
+          client.println("<!DOCTYPE html>");
+          client.println("<html>");
+          client.println("<head><title>ESP32 Text Input</title></head>");
+          client.println("<body>");
+          client.println("<h1>Enter Text to Display on LCD</h1>");
+          client.println("<form method='get'>");
+          client.println("Text: <input type='text' name='text'>");
+          client.println("<input type='submit' value='Send'>");
+          client.println("</form>");
+          client.println("<p>Current Text: " + receivedText + "</p>");
+          client.println("</body>");
+          client.println("</html>");
+
+          // Break out of the loop
+          Serial.print("break");
+          break;
+        } else {
+          // Clear the line buffer
+          Serial.println(currentLine);
+          currentLine = "";
+        }
+      } else if (c != '\r') {
+        currentLine += c;
+      }
+      
+      // Check for GET request with text parameter
+      if (currentLine.endsWith("GET /?text=")) {
+        int textStart = currentLine.indexOf("GET /?text=") + 10;
+        int textEnd = currentLine.indexOf(" ", textStart);
+        if (textEnd > textStart) {
+          receivedText = currentLine.substring(textStart, textEnd);
+          receivedText.replace("%20", " ");  // Replace URL-encoded spaces
+
+          // Serial.print("recieved : ");
+          // Serial.println(receivedText);
+
+          lcd.clear();
+          delay(50); 
+          lcd.setCursor(0, 0);
+          lcd.print("Message: ");
+          lcd.setCursor(0, 1);
+          lcd.print("Hello");
+        }
+      }
+    }
+  }
+
+  // Close the connection
+  client.stop();
+  Serial.println("Client disconnected.");
 }
 
 void loop() {
-  float temp = dht.readTemperature();
-  float humidity = dht.readHumidity();
-
-  if (isnan(temp) || isnan(humidity)) {
-    lcd.setCursor(0, 0);
-    lcd.print("Sensor Error");
-    delay(1000);
-  }
-
-  // Automatic Control
-  if (temp > 30) {
-    digitalWrite(FAN_RELAY, HIGH);
-    fanState = true;
-  } else {
-    digitalWrite(FAN_RELAY, LOW);
-    fanState = false;
-  }
-
-  if (humidity < 40) {
-    digitalWrite(NOZZLE_PUMP, HIGH);
-    nozzleState = true;
-  } else {
-    digitalWrite(NOZZLE_PUMP, LOW);
-    nozzleState = false;
-  }
-
-  // Manual Control via Buttons
-  if (digitalRead(BUTTON_FAN) == HIGH) {
-    while(digitalRead(BUTTON_FAN) == HIGH){ delay(10);}
-    fanState = !fanState;
-    digitalWrite(FAN_RELAY, fanState ? HIGH : LOW);
-    delay(300);  // Debounce
-  }
-
-  if (digitalRead(BUTTON_PUMP) == HIGH) {
-    while(digitalRead(BUTTON_PUMP) == HIGH){ delay(10);}
-    pumpState = !pumpState;
-    digitalWrite(WATER_PUMP, pumpState ? HIGH : LOW);
-    delay(300);  // Debounce
-  }
-
-  // LCD Display
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("T:");
-  lcd.print(temp);
-  lcd.print("C H:");
-  lcd.print(humidity);
-  lcd.print("%");
-
-  lcd.setCursor(0, 1);
-  lcd.print("Fan:");
-  lcd.print(fanState ? "ON " : "OFF");
-  lcd.print(" P1:");
-  lcd.print(pumpState ? "ON " : "OFF");
-  lcd.print(" P2:");
-  lcd.print(nozzleState ? "ON" : "OFF");
-
-  delay(1000);  // Refresh rate
+  checkClient();
+  delay(50);
 }
