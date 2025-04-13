@@ -1,36 +1,49 @@
-import cv2
+#include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 
-print("🎥 Camera Test Starting...")
+#define SCREEN_WIDTH 128  // OLED display width, in pixels
+#define SCREEN_HEIGHT 64  // OLED display height, in pixels
 
-# Try a few indexes (0 to 3) to find the working camera
-for i in range(4):
-    print(f"\n🔍 Trying camera index {i}...")
-    cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)  # CAP_DSHOW is for Windows. Remove if you're on Linux/Mac
+// Create display object (I2C address 0x3C is common)
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
-    if not cap.isOpened():
-        print(f"❌ Camera index {i} could not be opened.")
-        continue
+int sensorValue = 0;
 
-    ret, frame = cap.read()
-    if not ret:
-        print(f"⚠️ Camera index {i} opened but failed to capture image.")
-        cap.release()
-        continue
+void setup() {
 
-    print(f"✅ Camera index {i} is working!")
-    print(f"📏 Frame dimensions: {frame.shape[1]} x {frame.shape[0]}")
-    
-    # Show the frame
-    cv2.imshow(f"Camera {i} Preview (Press 'q' to quit)", frame)
+  Serial.begin(9600);
+  // Initialize the display
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println(F("SSD1306 allocation failed"));
+    for (;;)
+      ;  // Don't proceed, loop forever
+  }
 
-    # Wait for key press
-    key = cv2.waitKey(0)
-    if key == ord('q'):
-        cap.release()
-        cv2.destroyAllWindows()
-        break
+  display.clearDisplay();               // Clear the buffer
+  display.setTextSize(2);               // Text size
+  display.setTextColor(SSD1306_WHITE);  // Text color
+  display.setCursor(0, 10);             // Set cursor position
+  display.println("Hello");             // Print message
+  display.display();
+}
+void loop() {
 
-    cap.release()
-    cv2.destroyAllWindows()
+  sensorValue = analogRead(A0);  // read the input on analog pin 0:
+  Serial.println("The amount of CO2 (in PPM): ");
+  Serial.println(sensorValue);
 
-print("\n🔁 Camera test finished.")
+  display.setTextSize(2);
+  display.setTextColor(WHITE);
+  display.setCursor(18, 43);
+  display.println("CO2");
+  display.setCursor(63, 43);
+  display.println("(PPM)");
+  display.setTextSize(2);
+  display.setCursor(28, 5);
+  display.println(sensorValue);
+  display.display();
+  display.clearDisplay();
+  delay(2000);
+}
