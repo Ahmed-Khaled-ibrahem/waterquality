@@ -1,132 +1,36 @@
-#include <WiFi.h>
-#include <Wire.h>
-#include <LiquidCrystal_I2C.h>
+import cv2
 
-// Replace these with your Wi-Fi credentials
-const char* ssid = "Ahmed";
-const char* password = "#1288534459&4274321#ahmed";
+print("🎥 Camera Test Starting...")
 
-// set the LCD number of columns and rows
-int lcdColumns = 16;
-int lcdRows = 2;
-LiquidCrystal_I2C lcd(0x27, lcdColumns, lcdRows);
+# Try a few indexes (0 to 3) to find the working camera
+for i in range(4):
+    print(f"\n🔍 Trying camera index {i}...")
+    cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)  # CAP_DSHOW is for Windows. Remove if you're on Linux/Mac
 
-// Create a Wi-Fi server on port 80
-WiFiServer server(80);
+    if not cap.isOpened():
+        print(f"❌ Camera index {i} could not be opened.")
+        continue
 
-// Variable to store incoming text
-String receivedText = "Waiting...";
+    ret, frame = cap.read()
+    if not ret:
+        print(f"⚠️ Camera index {i} opened but failed to capture image.")
+        cap.release()
+        continue
 
-void setup() {
-  // Start Serial Monitor
-  Serial.begin(115200);
-  // initialize LCD
-  lcd.init();
-  // turn on LCD backlight
-  lcd.backlight();
+    print(f"✅ Camera index {i} is working!")
+    print(f"📏 Frame dimensions: {frame.shape[1]} x {frame.shape[0]}")
+    
+    # Show the frame
+    cv2.imshow(f"Camera {i} Preview (Press 'q' to quit)", frame)
 
-  lcd.setCursor(0, 0);
-  lcd.print("Connecting...");
+    # Wait for key press
+    key = cv2.waitKey(0)
+    if key == ord('q'):
+        cap.release()
+        cv2.destroyAllWindows()
+        break
 
-  // Connect to Wi-Fi
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("WiFi connected.");
-  Serial.println(WiFi.localIP());
+    cap.release()
+    cv2.destroyAllWindows()
 
-  // Display IP address on LCD
-  lcd.clear();
-  lcd.print("IP: ");
-  lcd.print(WiFi.localIP());
-
-  // Start the server
-  server.begin();
-}
-
-void checkClient() {
-
-  // Check if a client has connected
-  WiFiClient client = server.available();
-  if (!client) {
-    return;
-  }
-
-  Serial.println("New client connected.");
-  lcd.clear();
-  lcd.print("Camera Connected");
-  String currentLine = "";
-
-  while (client.connected()) {
-    if (client.available()) {
-      char c = client.read();
-      
-      // Serial.write(c);
-
-      if (c == '\n') {
-        // Handle HTTP GET request
-        if (currentLine.length() == 0) {
-          // Send HTTP header
-          client.println("HTTP/1.1 200 OK");
-          client.println("Content-type:text/html");
-          client.println();
-
-          // Send HTML form
-          client.println("<!DOCTYPE html>");
-          client.println("<html>");
-          client.println("<head><title>ESP32 Text Input</title></head>");
-          client.println("<body>");
-          client.println("<h1>Enter Text to Display on LCD</h1>");
-          client.println("<form method='get'>");
-          client.println("Text: <input type='text' name='text'>");
-          client.println("<input type='submit' value='Send'>");
-          client.println("</form>");
-          client.println("<p>Current Text: " + receivedText + "</p>");
-          client.println("</body>");
-          client.println("</html>");
-
-          // Break out of the loop
-          Serial.print("break");
-          break;
-        } else {
-          // Clear the line buffer
-          Serial.println(currentLine);
-          currentLine = "";
-        }
-      } else if (c != '\r') {
-        currentLine += c;
-      }
-      
-      // Check for GET request with text parameter
-      if (currentLine.endsWith("GET /?text=")) {
-        int textStart = currentLine.indexOf("GET /?text=") + 10;
-        int textEnd = currentLine.indexOf(" ", textStart);
-        if (textEnd > textStart) {
-          receivedText = currentLine.substring(textStart, textEnd);
-          receivedText.replace("%20", " ");  // Replace URL-encoded spaces
-
-          // Serial.print("recieved : ");
-          // Serial.println(receivedText);
-
-          lcd.clear();
-          delay(50); 
-          lcd.setCursor(0, 0);
-          lcd.print("Message: ");
-          lcd.setCursor(0, 1);
-          lcd.print("Hello");
-        }
-      }
-    }
-  }
-
-  // Close the connection
-  client.stop();
-  Serial.println("Client disconnected.");
-}
-
-void loop() {
-  checkClient();
-  delay(50);
-}
+print("\n🔁 Camera test finished.")
