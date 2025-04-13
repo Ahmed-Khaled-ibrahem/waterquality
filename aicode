@@ -1,0 +1,469 @@
+import cv2
+import mediapipe as mp
+import numpy as np
+import socket
+import math
+
+# ESP32 IP address and port (replace with your ESP's IP and port)
+ESP_IP = "192.168.1.7"  # Replace with the ESP's IP address
+ESP_PORT = 80
+
+# Create a socket and connect to the ESP
+client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+client_socket.connect((ESP_IP, ESP_PORT))
+print(f"Connected to ESP at {ESP_IP}:{ESP_PORT}")
+
+# Initialize MediaPipe Hands
+mp_hands = mp.solutions.hands
+mp_drawing = mp.solutions.drawing_utils
+hands = mp_hands.Hands(min_detection_confidence=0.5, min_tracking_confidence=0.5,max_num_hands=2)
+
+def send_data_to_ESP(data):
+    try:
+        # Send a message
+        message = f"{data}\n"  # The '\n' indicates the end of the message
+        client_socket.send(message.encode('utf-8'))
+
+    except Exception as e:
+        print(f"Error: {e}")
+
+    finally:
+        pass
+        # Close the connection
+        # client_socket.close()
+        # print("Connection closed.")
+
+def calculate_angle(p1, p2, p3):
+    v1 = (p1.x - p2.x, p1.y - p2.y)
+    v2 = (p3.x - p2.x, p3.y - p2.y)
+    dot_product = v1[0] * v2[0] + v1[1] * v2[1]
+    mag1 = math.sqrt(v1[0]**2 + v1[1]**2)
+    mag2 = math.sqrt(v2[0]**2 + v2[1]**2)
+    if mag1 == 0 or mag2 == 0:
+        return 0
+    cos_angle = dot_product / (mag1 * mag2)
+    return math.degrees(math.acos(max(-1, min(1, cos_angle))))
+
+def calculate_distance(landmark1, landmark2):
+    return math.sqrt((landmark1.x - landmark2.x)**2 + (landmark1.y - landmark2.y)**2)
+
+# Get hand size for normalization (wrist to middle MCP)
+def get_hand_size(landmarks):
+    return calculate_distance(landmarks[0], landmarks[9])
+
+# Check if a finger is extended (tip-to-base distance normalized)
+def is_finger_extended(tip, base, hand_size, extended_threshold=0.6, folded_threshold=0.3):
+    dist = calculate_distance(tip, base) / hand_size
+    return dist > extended_threshold  # True if extended, False if folded
+
+def distance(p1, p2):
+    """Calculate Euclidean distance between two landmark points."""
+    return np.hypot(p1.x - p2.x, p1.y - p2.y)
+
+# Gesture definitions (16 unchanged)
+def is_high_five(landmarks):
+    hand_size = get_hand_size(landmarks)
+    if hand_size == 0: return False
+    return all([
+        is_finger_extended(landmarks[4], landmarks[2], hand_size),
+        is_finger_extended(landmarks[8], landmarks[5], hand_size),
+        is_finger_extended(landmarks[12], landmarks[9], hand_size),
+        is_finger_extended(landmarks[16], landmarks[13], hand_size),
+        is_finger_extended(landmarks[20], landmarks[17], hand_size),
+    ])
+
+def is_not_good(landmarks):
+    hand_size = get_hand_size(landmarks)
+    if hand_size == 0: return False
+    return all([
+        is_finger_extended(landmarks[4], landmarks[2], hand_size),
+        landmarks[4].y > landmarks[0].y,
+        not is_finger_extended(landmarks[8], landmarks[5], hand_size),
+        not is_finger_extended(landmarks[12], landmarks[9], hand_size),
+        not is_finger_extended(landmarks[16], landmarks[13], hand_size),
+        not is_finger_extended(landmarks[20], landmarks[17], hand_size),
+    ])
+
+def is_victory(landmarks):
+    hand_size = get_hand_size(landmarks)
+    if hand_size == 0: return False
+    return all([
+        not is_finger_extended(landmarks[4], landmarks[2], hand_size),
+        is_finger_extended(landmarks[8], landmarks[5], hand_size),
+        is_finger_extended(landmarks[12], landmarks[9], hand_size),
+        not is_finger_extended(landmarks[16], landmarks[13], hand_size),
+        not is_finger_extended(landmarks[20], landmarks[17], hand_size),
+    ])
+
+def is_okay_sign(landmarks):
+    hand_list = distance(landmarks[4], landmarks[8]) < 0.05 and all(
+        landmarks[i].y < landmarks[0].y for i in [12, 16, 20])
+    return hand_list
+
+def is_this_way(landmarks):
+    hand_list = [
+        abs(landmarks[8].x) < abs(landmarks[7].x),
+        abs(landmarks[8].x) < abs(landmarks[5].x),
+        abs(landmarks[8].x) < abs(landmarks[12].x),
+        abs(landmarks[8].x) < abs(landmarks[16].x),
+        abs(landmarks[8].x) < abs(landmarks[17].x),
+        abs(landmarks[8].x) < abs(landmarks[4].x),
+    ]
+    return all(hand_list)
+
+def is_look_at_this(landmarks):
+    hand_list = [
+        abs(landmarks[8].x) > abs(landmarks[7].x),
+        abs(landmarks[8].x) > abs(landmarks[5].x),
+        abs(landmarks[8].x) > abs(landmarks[12].x),
+        abs(landmarks[8].x) > abs(landmarks[16].x),
+        abs(landmarks[8].x) > abs(landmarks[17].x),
+        abs(landmarks[8].y) > abs(landmarks[5].y),
+        abs(landmarks[12].y) < abs(landmarks[10].y),
+    ]
+    return all(hand_list)
+
+def is_i_love_you(landmarks):
+    hand_size = get_hand_size(landmarks)
+    if hand_size == 0: return False
+    return all([
+        is_finger_extended(landmarks[4], landmarks[2], hand_size),
+        is_finger_extended(landmarks[8], landmarks[5], hand_size),
+        not is_finger_extended(landmarks[12], landmarks[9], hand_size),
+        not is_finger_extended(landmarks[16], landmarks[13], hand_size),
+        is_finger_extended(landmarks[20], landmarks[17], hand_size),
+    ])
+
+def is_call_me(landmarks):
+    hand_size = get_hand_size(landmarks)
+    if hand_size == 0: return False
+    return all([
+        is_finger_extended(landmarks[4], landmarks[2], hand_size),
+        not is_finger_extended(landmarks[8], landmarks[5], hand_size),
+        not is_finger_extended(landmarks[12], landmarks[9], hand_size),
+        not is_finger_extended(landmarks[16], landmarks[13], hand_size),
+        is_finger_extended(landmarks[20], landmarks[17], hand_size),
+    ])
+
+def is_yes(landmarks):
+    hand_size = get_hand_size(landmarks)
+    if hand_size == 0: return False
+
+    # Thumb angle for strict vertical "Yes"
+    thumb_angle = calculate_angle(landmarks[0], landmarks[2], landmarks[4])
+    strict_up = 160 < thumb_angle < 200  # Nearly 180° for straight up
+
+    return all([
+        is_finger_extended(landmarks[4], landmarks[2], hand_size),  # Thumb extended
+        landmarks[4].y < landmarks[0].y - 0.1 * hand_size,  # Thumb well above wrist
+        not is_finger_extended(landmarks[8], landmarks[5], hand_size),  # Index folded
+        not is_finger_extended(landmarks[12], landmarks[9], hand_size),  # Middle folded
+        not is_finger_extended(landmarks[16], landmarks[13], hand_size),  # Ring folded
+        not is_finger_extended(landmarks[20], landmarks[17], hand_size),  # Pinky folded
+        strict_up  # Thumb straight up
+    ])
+
+def is_no(landmarks):
+    hand_size = get_hand_size(landmarks)
+    if hand_size == 0: return False
+    return all([
+        not is_finger_extended(landmarks[4], landmarks[2], hand_size),
+        is_finger_extended(landmarks[8], landmarks[5], hand_size),
+        is_finger_extended(landmarks[12], landmarks[9], hand_size),
+        not is_finger_extended(landmarks[16], landmarks[13], hand_size),
+        not is_finger_extended(landmarks[20], landmarks[17], hand_size),
+    ])
+
+def is_stop(hands_landmarks):
+    # Check if exactly two hands are detected
+    if not hands_landmarks or len(hands_landmarks) != 2:
+        return False
+
+    # Get landmarks and handedness for both hands
+    hand1 = hands_landmarks[0].landmark
+    hand2 = hands_landmarks[1].landmark
+    # Assuming multi_handedness is available to distinguish hands (optional)
+
+    hand1_size = get_hand_size(hand1)
+    hand2_size = get_hand_size(hand2)
+    if hand1_size == 0 or hand2_size == 0:
+        return False
+
+    # Check if one hand is vertical (fingers up)
+    def is_vertical(hand):
+        return all([
+            is_finger_extended(hand[4], hand[2], get_hand_size(hand)),  # Thumb extended
+            is_finger_extended(hand[8], hand[5], get_hand_size(hand)),  # Index extended
+            is_finger_extended(hand[12], hand[9], get_hand_size(hand)),  # Middle extended
+            is_finger_extended(hand[16], hand[13], get_hand_size(hand)),  # Ring extended
+            is_finger_extended(hand[20], hand[17], get_hand_size(hand)),  # Pinky extended
+            hand[8].y < hand[0].y  # Fingers above wrist (upright)
+        ])
+
+    # Check if one hand is horizontal (fingers sideways)
+    def is_horizontal(hand):
+        return all([
+            is_finger_extended(hand[4], hand[2], get_hand_size(hand)),  # Thumb extended
+            is_finger_extended(hand[8], hand[5], get_hand_size(hand)),  # Index extended
+            is_finger_extended(hand[12], hand[9], get_hand_size(hand)),  # Middle extended
+            is_finger_extended(hand[16], hand[13], get_hand_size(hand)),  # Ring extended
+            is_finger_extended(hand[20], hand[17], get_hand_size(hand)),  # Pinky extended
+            abs(hand[8].y - hand[0].y) < 0.1 * get_hand_size(hand)  # Fingers level with wrist (sideways)
+        ])
+
+    # Check relative position: horizontal hand's fingers near vertical hand's wrist
+    def forms_t_shape(vertical_hand, horizontal_hand):
+        # Vertical hand's wrist (0) should be near horizontal hand's fingertips (e.g., 8 or 20)
+        wrist_v = vertical_hand[0]
+        finger_h = horizontal_hand[8]  # Index tip of horizontal hand
+        dist = calculate_distance(wrist_v, finger_h) / max(hand1_size, hand2_size)
+        return dist < 0.3  # Close enough to form a "T"
+
+    # Test both combinations (hand1 vertical, hand2 horizontal or vice versa)
+    if is_vertical(hand1) and is_horizontal(hand2) and forms_t_shape(hand1, hand2):
+        return True
+    if is_vertical(hand2) and is_horizontal(hand1) and forms_t_shape(hand2, hand1):
+        return True
+
+    return False
+def is_peace(landmarks):
+    hand_size = get_hand_size(landmarks)
+    if hand_size == 0: return False
+    spread = calculate_distance(landmarks[8], landmarks[12]) / hand_size > 0.3
+    return all([
+        not is_finger_extended(landmarks[4], landmarks[2], hand_size),
+        is_finger_extended(landmarks[8], landmarks[5], hand_size),
+        is_finger_extended(landmarks[12], landmarks[9], hand_size),
+        not is_finger_extended(landmarks[16], landmarks[13], hand_size),
+        not is_finger_extended(landmarks[20], landmarks[17], hand_size),
+        spread,
+    ])
+
+def is_hello(landmarks):
+    hand_size = get_hand_size(landmarks)
+    if hand_size == 0: return False
+    return all([
+        not is_finger_extended(landmarks[4], landmarks[2], hand_size),
+        is_finger_extended(landmarks[8], landmarks[5], hand_size),
+        is_finger_extended(landmarks[12], landmarks[9], hand_size),
+        is_finger_extended(landmarks[16], landmarks[13], hand_size),
+        is_finger_extended(landmarks[20], landmarks[17], hand_size),
+    ])
+
+def is_three(landmarks):
+    hand_size = get_hand_size(landmarks)
+    if hand_size == 0: return False
+    return all([
+        not is_finger_extended(landmarks[4], landmarks[2], hand_size),
+        is_finger_extended(landmarks[8], landmarks[5], hand_size),
+        is_finger_extended(landmarks[12], landmarks[9], hand_size),
+        is_finger_extended(landmarks[16], landmarks[13], hand_size),
+        not is_finger_extended(landmarks[20], landmarks[17], hand_size),
+    ])
+
+
+def is_point_up(landmarks):
+    hand_size = get_hand_size(landmarks)
+    if hand_size == 0: return False
+
+    # Calculate angle between wrist, index base, and index tip (should be near vertical)
+    angle = calculate_angle(landmarks[0], landmarks[5], landmarks[8])  # Wrist -> Index base -> Index tip
+    upright = 160 < angle < 200  # Expect ~180° for straight up (allowing 20° tolerance)
+
+    return all([
+        not is_finger_extended(landmarks[4], landmarks[2], hand_size),  # Thumb folded
+        is_finger_extended(landmarks[8], landmarks[5], hand_size),  # Index extended
+        landmarks[8].y < landmarks[0].y - 0.1 * hand_size,  # Index well above wrist
+        not is_finger_extended(landmarks[12], landmarks[9], hand_size),  # Middle folded
+        not is_finger_extended(landmarks[16], landmarks[13], hand_size),  # Ring folded
+        not is_finger_extended(landmarks[20], landmarks[17], hand_size),  # Pinky folded
+        upright  # Index pointing up
+    ])
+
+def is_shush(landmarks):
+    hand_size = get_hand_size(landmarks)
+    if hand_size == 0: return False
+
+    # Calculate angle for index finger (should be near vertical)
+    angle = calculate_angle(landmarks[0], landmarks[5], landmarks[8])  # Wrist -> Index base -> Index tip
+    upright = 160 < angle < 200  # Nearly vertical, like Point Up
+
+    # Check if hand is closer to camera (z-depth) or higher in frame
+    index_tip_z = landmarks[8].z  # Negative z means closer to camera
+    wrist_y = landmarks[0].y
+    index_tip_y = landmarks[8].y
+
+    return all([
+        not is_finger_extended(landmarks[4], landmarks[2], hand_size),  # Thumb folded
+        is_finger_extended(landmarks[8], landmarks[5], hand_size),  # Index extended
+        not is_finger_extended(landmarks[12], landmarks[9], hand_size),  # Middle folded
+        not is_finger_extended(landmarks[16], landmarks[13], hand_size),  # Ring folded
+        not is_finger_extended(landmarks[20], landmarks[17], hand_size),  # Pinky folded
+        upright,  # Index vertical
+        index_tip_y < wrist_y - 0.15 * hand_size,  # Index higher than wrist
+        index_tip_z < -0.1  # Hand closer to camera
+    ])
+
+def is_good(landmarks):
+    hand_size = get_hand_size(landmarks)
+    if hand_size == 0: return False
+
+    # Thumb angle for a casual "Like" (tilted back slightly, not fully vertical)
+    thumb_angle = calculate_angle(landmarks[0], landmarks[2], landmarks[4])  # Wrist -> Thumb base -> Thumb tip
+    like_angle = 120 < thumb_angle < 160  # Tilted back, not straight up (vs. Yes: ~180°)
+
+    # Ensure thumb is above wrist but not as strict as Yes
+    thumb_up = landmarks[4].y < landmarks[0].y - 0.05 * hand_size
+
+    return all([
+        is_finger_extended(landmarks[4], landmarks[2], hand_size),  # Thumb extended
+        thumb_up,  # Thumb above wrist
+        not is_finger_extended(landmarks[8], landmarks[5], hand_size),  # Index folded
+        not is_finger_extended(landmarks[12], landmarks[9], hand_size),  # Middle folded
+        not is_finger_extended(landmarks[16], landmarks[13], hand_size),  # Ring folded
+        not is_finger_extended(landmarks[20], landmarks[17], hand_size),  # Pinky folded
+        like_angle  # Thumb tilted for "Like"
+    ])
+def is_wait(landmarks):
+    hand_size = get_hand_size(landmarks)
+    if hand_size == 0: return False
+    together = calculate_distance(landmarks[8], landmarks[20]) / hand_size < 0.4  # Fingers close
+    return all([
+        is_finger_extended(landmarks[4], landmarks[2], hand_size),
+        is_finger_extended(landmarks[8], landmarks[5], hand_size),
+        is_finger_extended(landmarks[12], landmarks[9], hand_size),
+        is_finger_extended(landmarks[16], landmarks[13], hand_size),
+        is_finger_extended(landmarks[20], landmarks[17], hand_size),
+        together,
+    ])
+
+def is_please(landmarks):
+    hand_size = get_hand_size(landmarks)
+    if hand_size == 0: return False
+    together = calculate_distance(landmarks[8], landmarks[20]) / hand_size < 0.4
+    return all([
+        not is_finger_extended(landmarks[4], landmarks[2], hand_size),  # Thumb folded
+        is_finger_extended(landmarks[8], landmarks[5], hand_size),
+        is_finger_extended(landmarks[12], landmarks[9], hand_size),
+        is_finger_extended(landmarks[16], landmarks[13], hand_size),
+        is_finger_extended(landmarks[20], landmarks[17], hand_size),
+        together,
+        landmarks[0].y > landmarks[8].y,  # Palm up
+    ])
+
+def is_fist(landmarks):
+    hand_size = get_hand_size(landmarks)
+    if hand_size == 0: return False
+
+    return all([
+        not is_finger_extended(landmarks[4], landmarks[2], hand_size),  # Thumb folded
+        not is_finger_extended(landmarks[8], landmarks[5], hand_size),  # Index folded
+        not is_finger_extended(landmarks[12], landmarks[9], hand_size),  # Middle folded
+        not is_finger_extended(landmarks[16], landmarks[13], hand_size),  # Ring folded
+        not is_finger_extended(landmarks[20], landmarks[17], hand_size),  # Pinky folded
+    ])
+
+def is_thank_you(landmarks):
+    hand_size = get_hand_size(landmarks)
+    if hand_size == 0: return False
+    return all([
+        not is_finger_extended(landmarks[4], landmarks[2], hand_size),
+        is_finger_extended(landmarks[8], landmarks[5], hand_size),
+        is_finger_extended(landmarks[12], landmarks[9], hand_size),
+        is_finger_extended(landmarks[16], landmarks[13], hand_size),
+        not is_finger_extended(landmarks[20], landmarks[17], hand_size),
+        landmarks[8].y < landmarks[0].y,  # Hand raised (near chin in ASL)
+    ])
+
+def is_pinky_promise(landmarks):
+    hand_size = get_hand_size(landmarks)
+    if hand_size == 0: return False
+
+    return all([
+        not is_finger_extended(landmarks[4], landmarks[2], hand_size),  # Thumb folded
+        not is_finger_extended(landmarks[8], landmarks[5], hand_size),  # Index folded
+        not is_finger_extended(landmarks[12], landmarks[9], hand_size),  # Middle folded
+        not is_finger_extended(landmarks[16], landmarks[13], hand_size),  # Ring folded
+        is_finger_extended(landmarks[20], landmarks[17], hand_size),  # Pinky extended
+    ])
+
+# Updated classification
+def classify_hand_gesture(landmarks):
+    if not landmarks:
+        return "Neutral"
+    if is_high_five(landmarks): # good
+        return "High Five"
+    if is_not_good(landmarks): # good
+        return "Not Good"
+    if is_victory(landmarks):  # good
+        return "Victory"
+    if is_okay_sign(landmarks):  # good
+        return "Okay"
+    if is_this_way(landmarks):  # good
+        return "This Way"
+    if is_look_at_this(landmarks): # good
+        return "Look At This"
+    if is_i_love_you(landmarks): # good
+        return "I Love You"
+    if is_call_me(landmarks):  # good
+        return "Call Me"
+    if is_yes(landmarks):  # good
+        return "Yes"
+    if is_hello(landmarks): # good
+        return "Hello"
+    if is_three(landmarks): # good
+        return "Three"
+    if is_point_up(landmarks):  # good
+        return "Point Up"
+    if is_fist(landmarks):  # good
+        return "Wait"
+    if is_pinky_promise(landmarks):  # good
+        return "Promise"
+
+
+    return "Neutral"
+# Open webcam
+cap = cv2.VideoCapture(0)
+
+if not cap.isOpened():
+    print("Error: Could not open webcam.")
+    exit()
+
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+        print("Error: Failed to capture image.")
+        break
+
+    # Flip the frame horizontally for a mirror-like effect
+    frame = cv2.flip(frame, 1)
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+    # Process the frame
+    result = hands.process(rgb_frame)
+    gesture = "Neutral"
+
+    # Draw hand annotations
+    if result.multi_hand_landmarks:
+        for hand_landmarks in result.multi_hand_landmarks:
+            mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+
+            # Classify hand gesture
+            gesture = classify_hand_gesture(hand_landmarks.landmark)
+            send_data_to_ESP(gesture)
+    else:
+        send_data_to_ESP(gesture)
+
+    # Display the gesture classification
+    cv2.putText(frame, f"Gesture: {gesture}", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+    # Show the output
+    cv2.imshow('Hand Gesture Detection', frame)
+
+    # Break loop on 'q' key press
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+# Release resources
+cap.release()
+cv2.destroyAllWindows()
