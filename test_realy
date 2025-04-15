@@ -17,12 +17,12 @@ DHT dht(DHTPIN, DHTTYPE);
 #define ECHO_PIN 4
 #define RELAY_PIN 5
 #define SERVO_PIN 6
-// #define MOTOR1_IN1 7
-// #define MOTOR1_IN2 8
-// #define MOTOR2_IN1 9
-// #define MOTOR2_IN2 10
-#define GPS_TX 11
-#define GPS_RX 12
+#define MOTOR1_IN1 7
+#define MOTOR1_IN2 8
+#define MOTOR2_IN1 9
+#define MOTOR2_IN2 10
+#define GPS_TX 22
+#define GPS_RX 23
 // #define SIM800_TX 13
 // #define SIM800_RX 14
 // #define ESP_CAM_TX 15
@@ -59,10 +59,10 @@ void setup() {
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
   pinMode(RELAY_PIN, OUTPUT);
-  // pinMode(MOTOR1_IN1, OUTPUT);
-  // pinMode(MOTOR1_IN2, OUTPUT);
-  // pinMode(MOTOR2_IN1, OUTPUT);
-  // pinMode(MOTOR2_IN2, OUTPUT);
+  pinMode(MOTOR1_IN1, OUTPUT);
+  pinMode(MOTOR1_IN2, OUTPUT);
+  pinMode(MOTOR2_IN1, OUTPUT);
+  pinMode(MOTOR2_IN2, OUTPUT);
 
   myServo.attach(SERVO_PIN);
   // sim800.begin(9600);
@@ -93,11 +93,11 @@ void loop() {
 
   log_distance();
 
-  // if (distance < 20) {
-  //   avoidObstacle();
-  // } else {
-  //   moveForward();
-  // }
+  if (distance < 20) {
+    avoidObstacle();
+  } else {
+    moveForward();
+  }
 
   if (Serial.available()) {
     String command = Serial.readStringUntil('\n');  // Read input until newline
@@ -110,35 +110,35 @@ void loop() {
 
   getGPS();
 
-  // triggerValue = 300;
+  triggerValue = 300;
 
-  // if (fireDetected1 > triggerValue || fireDetected2 > triggerValue || fireDetected3 > triggerValue || fireDetected4 > triggerValue || fireDetected5 > triggerValue ) {
-  //   Serial.println("Fire detected!");
-  //   stopMotors();
+  if (fireDetected1 > triggerValue || fireDetected2 > triggerValue || fireDetected3 > triggerValue || fireDetected4 > triggerValue || fireDetected5 > triggerValue ) {
+    Serial.println("Fire detected!");
+    stopMotors();
 
-  //   int fireValues[5] = { fireDetected1, fireDetected2, fireDetected3, fireDetected4, fireDetected5 };
-  //   int maxIndex = 0;
-  //   int maxValue = fireValues[0];
+    int fireValues[5] = { fireDetected1, fireDetected2, fireDetected3, fireDetected4, fireDetected5 };
+    int maxIndex = 0;
+    int maxValue = fireValues[0];
 
-  //   for (int i = 1; i < 5; i++) {
-  //     if (fireValues[i] > maxValue) {
-  //       maxValue = fireValues[i];
-  //       maxIndex = i;
-  //     }
-  //   }
+    for (int i = 1; i < 5; i++) {
+      if (fireValues[i] > maxValue) {
+        maxValue = fireValues[i];
+        maxIndex = i;
+      }
+    }
 
-  //   int servo_angles[5] = { 60, 80, 90, 100, 120 };
-  //   myServo.write(servo_angles[maxIndex]);
+    int servo_angles[5] = { 60, 80, 90, 100, 120 };
+    myServo.write(servo_angles[maxIndex]);
 
-  //   lastLink = takePhoto();
+    // lastLink = takePhoto();
 
-  //   String text = getMessage();
-  //   Serial.println(text);
-  //   Serial.println("------------------------");
-  //   sendAlert(text);
-  //   activateWaterPump();
-  //   myServo.write(90);
-  // }
+    String text = getMessage();
+    Serial.println(text);
+    Serial.println("------------------------");
+    // sendAlert(text);
+    activateWaterPump();
+    myServo.write(90);
+  }
 
   delay(1000);
 }
@@ -175,17 +175,17 @@ void log_distance() {
 //   sim800.write(26);
 //   delay(200);
 // }
-// String getMessage() {
-//   return "Fire detected! \n"
-//          "Location : "
-//          + String(getGPS()) + "\n"
-//                               "Temperature : "
-//          + String(temperature) + "\n"
-//                                  "Humidity : "
-//          + String(humidity) + "\n"
-//                               "Photo Link : "
-//          + "https://xakahklkfirpoanswpep.supabase.co/storage/v1/object/public/firecar//" + lastLink + ".jpg";
-// }
+String getMessage() {
+  return "Fire detected! \n"
+         "Location : "
+         + String(getGPS()) + "\n"
+                              "Temperature : "
+         + String(temperature) + "\n"
+                                 "Humidity : "
+         + String(humidity) + "\n"
+                              "Photo Link : "
+         + "https://xakahklkfirpoanswpep.supabase.co/storage/v1/object/public/firecar//" + lastLink + ".jpg";
+}
 
 String getGPS() {
 
@@ -232,24 +232,24 @@ String getGPS() {
 
 //   return str_id;
 // }
-// void activateWaterPump() {
-//   Serial.println("pump is runninig");
-//   digitalWrite(RELAY_PIN, HIGH);
-//   delay(5000);
-//   digitalWrite(RELAY_PIN, LOW);
-// }
-// void moveForward() {
-//   digitalWrite(MOTOR1_IN1, HIGH);
-//   digitalWrite(MOTOR1_IN2, LOW);
-//   digitalWrite(MOTOR2_IN1, HIGH);
-//   digitalWrite(MOTOR2_IN2, LOW);
-// }
-// void stopMotors() {
-//   digitalWrite(MOTOR1_IN1, LOW);
-//   digitalWrite(MOTOR1_IN2, LOW);
-//   digitalWrite(MOTOR2_IN1, LOW);
-//   digitalWrite(MOTOR2_IN2, LOW);
-// }
+void activateWaterPump() {
+  Serial.println("pump is runninig");
+  digitalWrite(RELAY_PIN, HIGH);
+  delay(5000);
+  digitalWrite(RELAY_PIN, LOW);
+}
+void moveForward() {
+  digitalWrite(MOTOR1_IN1, HIGH);
+  digitalWrite(MOTOR1_IN2, LOW);
+  digitalWrite(MOTOR2_IN1, HIGH);
+  digitalWrite(MOTOR2_IN2, LOW);
+}
+void stopMotors() {
+  digitalWrite(MOTOR1_IN1, LOW);
+  digitalWrite(MOTOR1_IN2, LOW);
+  digitalWrite(MOTOR2_IN1, LOW);
+  digitalWrite(MOTOR2_IN2, LOW);
+}
 float getUltrasonicDistance() {
   digitalWrite(TRIG_PIN, LOW);
   delayMicroseconds(5);
@@ -260,43 +260,43 @@ float getUltrasonicDistance() {
   duration = pulseIn(ECHO_PIN, HIGH);
   return duration * 0.034 / 2;
 }
-// void avoidObstacle() {
-//   Serial.println("Obstacle detected! Avoiding...");
-//   stopMotors();
-//   myServo.write(0);
-//   delay(4000);
-//   float leftDistance = getUltrasonicDistance();
-//   myServo.write(180);
-//   delay(4000);
-//   float rightDistance = getUltrasonicDistance();
-//   myServo.write(90);
+void avoidObstacle() {
+  Serial.println("Obstacle detected! Avoiding...");
+  stopMotors();
+  myServo.write(0);
+  delay(4000);
+  float leftDistance = getUltrasonicDistance();
+  myServo.write(180);
+  delay(4000);
+  float rightDistance = getUltrasonicDistance();
+  myServo.write(90);
 
-//   if (leftDistance > rightDistance) {
-//     turnLeft();
-//   } else {
-//     turnRight();
-//   }
-// }
+  if (leftDistance > rightDistance) {
+    turnLeft();
+  } else {
+    turnRight();
+  }
+}
 
-// void turnLeft() {
-//   Serial.println("Turning Left");
-//   digitalWrite(MOTOR1_IN1, LOW);
-//   digitalWrite(MOTOR1_IN2, HIGH);
-//   digitalWrite(MOTOR2_IN1, HIGH);
-//   digitalWrite(MOTOR2_IN2, LOW);
-//   delay(3000);
-//   moveForward();
-// }
+void turnLeft() {
+  Serial.println("Turning Left");
+  digitalWrite(MOTOR1_IN1, LOW);
+  digitalWrite(MOTOR1_IN2, HIGH);
+  digitalWrite(MOTOR2_IN1, HIGH);
+  digitalWrite(MOTOR2_IN2, LOW);
+  delay(3000);
+  moveForward();
+}
 
-// void turnRight() {
-//   Serial.println("Turning Right");
-//   digitalWrite(MOTOR1_IN1, HIGH);
-//   digitalWrite(MOTOR1_IN2, LOW);
-//   digitalWrite(MOTOR2_IN1, LOW);
-//   digitalWrite(MOTOR2_IN2, HIGH);
-//   delay(3000);
-//   moveForward();
-// }
+void turnRight() {
+  Serial.println("Turning Right");
+  digitalWrite(MOTOR1_IN1, HIGH);
+  digitalWrite(MOTOR1_IN2, LOW);
+  digitalWrite(MOTOR2_IN1, LOW);
+  digitalWrite(MOTOR2_IN2, HIGH);
+  delay(3000);
+  moveForward();
+}
 
 // void testSIM800() {
 //   Serial.println("Testing SIM800...");
