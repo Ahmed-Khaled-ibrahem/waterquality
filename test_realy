@@ -2,7 +2,7 @@
 #include <DHT.h>
 #include <SoftwareSerial.h>
 #include <Servo.h>
-// #include <TinyGPS++.h>
+#include <TinyGPS++.h>
 
 #define DHTPIN 2
 #define DHTTYPE DHT22
@@ -21,20 +21,20 @@ DHT dht(DHTPIN, DHTTYPE);
 // #define MOTOR1_IN2 8
 // #define MOTOR2_IN1 9
 // #define MOTOR2_IN2 10
-// #define GPS_TX 11
-// #define GPS_RX 12
+#define GPS_TX 11
+#define GPS_RX 12
 // #define SIM800_TX 13
 // #define SIM800_RX 14
 // #define ESP_CAM_TX 15
 // #define ESP_CAM_RX 16  // Using voltage divider with 1kΩ and 2kΩ resistors or equal
 
 // SoftwareSerial sim800(SIM800_TX, SIM800_RX);
-// SoftwareSerial gpsSerial(GPS_TX, GPS_RX);
+SoftwareSerial gpsSerial(GPS_TX, GPS_RX);
 // SoftwareSerial espCam(ESP_CAM_TX, ESP_CAM_RX);
 Servo myServo;
 // const String phoneNumber = "+1234567890";  // Replace with the target phone number
-// String location = "";
-// TinyGPSPlus gps;
+String location = "";
+TinyGPSPlus gps;
 
 float temperature = 0;
 float humidity = 0;
@@ -45,7 +45,7 @@ int fireDetected3 = 0;
 int fireDetected4 = 0;
 int fireDetected5 = 0;
 float distance = 0;
-long duration = 0; 
+long duration = 0;
 int triggerValue = 0;
 
 void setup() {
@@ -66,7 +66,7 @@ void setup() {
 
   myServo.attach(SERVO_PIN);
   // sim800.begin(9600);
-  // gpsSerial.begin(9600);
+  gpsSerial.begin(9600);
   // espCam.begin(9600);
 
   // testSIM800();
@@ -79,7 +79,7 @@ void loop() {
   temperature = dht.readTemperature();
   humidity = dht.readHumidity();
 
-  // log_dht();
+  log_dht();
 
   fireDetected1 = analogRead(FIRE_SENSOR_1);
   fireDetected2 = analogRead(FIRE_SENSOR_2);
@@ -87,7 +87,7 @@ void loop() {
   fireDetected4 = analogRead(FIRE_SENSOR_4);
   fireDetected5 = analogRead(FIRE_SENSOR_5);
 
-  // log_fire_sensor();
+  log_fire_sensor();
 
   distance = getUltrasonicDistance();
 
@@ -99,16 +99,16 @@ void loop() {
   //   moveForward();
   // }
 
-  // if (Serial.available()) {
-  //   String command = Serial.readStringUntil('\n');  // Read input until newline
-  //   command.trim();                                 // Remove any whitespace or newlines
+  if (Serial.available()) {
+    String command = Serial.readStringUntil('\n');  // Read input until newline
+    command.trim();                                 // Remove any whitespace or newlines
 
-  //   if (command == "fire") {
-  //     fireDetected1 = 600;
-  //   }
-  // }
+    if (command == "fire") {
+      fireDetected1 = 600;
+    }
+  }
 
-  // getGPS();
+  getGPS();
 
   // triggerValue = 300;
 
@@ -140,7 +140,7 @@ void loop() {
   //   myServo.write(90);
   // }
 
-  delay(250);
+  delay(1000);
 }
 
 void log_dht() {
@@ -186,30 +186,32 @@ void log_distance() {
 //                               "Photo Link : "
 //          + "https://xakahklkfirpoanswpep.supabase.co/storage/v1/object/public/firecar//" + lastLink + ".jpg";
 // }
-// String getGPS() {
 
-//   while (gpsSerial.available() > 0) {
-//     gps.encode(gpsSerial.read());
-//   }
+String getGPS() {
 
-//   if (gps.location.isUpdated()) {
-//     Serial.print("LAT: ");
-//     Serial.println(gps.location.lat(), 6);
-//     Serial.print("LONG: ");
-//     Serial.println(gps.location.lng(), 6);
-//     Serial.print("SPEED (km/h) = ");
-//     Serial.println(gps.speed.kmph());
-//     Serial.print("Satellites = ");
-//     Serial.println(gps.satellites.value());
-//     Serial.print("Time in UTC: ");
-//     Serial.println(String(gps.date.year()) + "/" + String(gps.date.month()) + "/" + String(gps.date.day()) + "," + String(gps.time.hour()) + ":" + String(gps.time.minute()) + ":" + String(gps.time.second()));
-//     Serial.println("");
+  while (gpsSerial.available() > 0) {
+    gps.encode(gpsSerial.read());
+  }
 
-//     location = String(gps.location.lat()) + "  " + String(gps.location.lng());
-//   }
+  if (gps.location.isUpdated()) {
+    Serial.print("LAT: ");
+    Serial.println(gps.location.lat(), 6);
+    Serial.print("LONG: ");
+    Serial.println(gps.location.lng(), 6);
+    Serial.print("SPEED (km/h) = ");
+    Serial.println(gps.speed.kmph());
+    Serial.print("Satellites = ");
+    Serial.println(gps.satellites.value());
+    Serial.print("Time in UTC: ");
+    Serial.println(String(gps.date.year()) + "/" + String(gps.date.month()) + "/" + String(gps.date.day()) + "," + String(gps.time.hour()) + ":" + String(gps.time.minute()) + ":" + String(gps.time.second()));
+    Serial.println("");
 
-//   return location;
-// }
+    location = String(gps.location.lat()) + "  " + String(gps.location.lng());
+  }
+
+  return location;
+}
+
 // String takePhoto() {
 
 //   String str_id = "0";
