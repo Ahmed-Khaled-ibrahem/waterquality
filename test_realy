@@ -44,7 +44,7 @@ int fireDetected2 = 0;
 int fireDetected3 = 0;
 int fireDetected4 = 0;
 int fireDetected5 = 0;
-float distance = 0;
+float distance = 100;
 long duration = 0;
 int triggerValue = 0;
 
@@ -112,9 +112,9 @@ void loop() {
 
   triggerValue = 300;
 
-  if (fireDetected1 > triggerValue || fireDetected2 > triggerValue || fireDetected3 > triggerValue || fireDetected4 > triggerValue || fireDetected5 > triggerValue ) {
+  if (fireDetected1 > triggerValue || fireDetected2 > triggerValue || fireDetected3 > triggerValue || fireDetected4 > triggerValue || fireDetected5 > triggerValue) {
     Serial.println("Fire detected!");
-    stopMotors();
+    // stopMotors();
 
     int fireValues[5] = { fireDetected1, fireDetected2, fireDetected3, fireDetected4, fireDetected5 };
     int maxIndex = 0;
@@ -129,14 +129,13 @@ void loop() {
 
     int servo_angles[5] = { 60, 80, 90, 100, 120 };
     myServo.write(servo_angles[maxIndex]);
-
+    delay(2000);
     // lastLink = takePhoto();
 
-    String text = getMessage();
-    Serial.println(text);
-    Serial.println("------------------------");
-    // sendAlert(text);
-    activateWaterPump();
+    // String text = getMessage();
+    // Serial.println(text);
+    // // sendAlert(text);
+    // activateWaterPump();
     myServo.write(90);
   }
 
@@ -232,12 +231,14 @@ String getGPS() {
 
 //   return str_id;
 // }
+
 void activateWaterPump() {
   Serial.println("pump is runninig");
   digitalWrite(RELAY_PIN, HIGH);
   delay(5000);
   digitalWrite(RELAY_PIN, LOW);
 }
+
 void moveForward() {
   digitalWrite(MOTOR1_IN1, HIGH);
   digitalWrite(MOTOR1_IN2, LOW);
