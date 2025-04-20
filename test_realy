@@ -23,7 +23,7 @@ void setup() {
   dht.begin();
   windowServo.attach(SERVO_PIN);
   pinMode(BUTTON_PIN, INPUT);
-  
+
   lcd.init();
   lcd.backlight();
   lcd.setCursor(0, 0);
@@ -35,20 +35,13 @@ void setup() {
 void loop() {
   float temp = dht.readTemperature();
   bool buttonState = digitalRead(BUTTON_PIN);
+  Serial.println(buttonState);
 
-  // Debounce button
-  if (buttonState != lastButtonState) {
-    lastDebounceTime = millis();
+  if (digitalRead(BUTTON_PIN) == HIGH) {
+    while (digitalRead(BUTTON_PIN) == HIGH) { delay(50); }
+    manualOverride = !manualOverride;
+    toggleWindow();  // Toggle manually
   }
-
-  if ((millis() - lastDebounceTime) > debounceDelay) {
-    // On rising edge of button press
-    if (buttonState == HIGH && lastButtonState == LOW) {
-      manualOverride = !manualOverride;
-      toggleWindow();  // Toggle manually
-    }
-  }
-  lastButtonState = buttonState;
 
   if (!manualOverride) {
     // Automatic control based on temperature
@@ -66,7 +59,7 @@ void loop() {
     lcd.print("Error ");
   } else {
     lcd.print(temp);
-    lcd.print((char)223); // degree symbol
+    lcd.print((char)223);  // degree symbol
     lcd.print("C ");
   }
 
@@ -74,11 +67,11 @@ void loop() {
   lcd.print("Window: ");
   lcd.print(windowOpen ? "Open  " : "Closed");
 
-  delay(500); // Reduce flickering and DHT reading interval
+  delay(500);  // Reduce flickering and DHT reading interval
 }
 
 void openWindow() {
-  windowServo.write(150); // Adjust angle if needed
+  windowServo.write(150);  // Adjust angle if needed
   windowOpen = true;
 }
 
