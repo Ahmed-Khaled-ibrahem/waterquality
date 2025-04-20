@@ -17,6 +17,7 @@ bool manualOverride = false;
 bool lastButtonState = LOW;
 unsigned long lastDebounceTime = 0;
 unsigned long debounceDelay = 50;
+int counter = 0;
 
 void setup() {
   Serial.begin(9600);
@@ -38,13 +39,22 @@ void loop() {
   Serial.println(buttonState);
 
   if (digitalRead(BUTTON_PIN) == HIGH) {
-    while (digitalRead(BUTTON_PIN) == HIGH) { delay(50); }
-    manualOverride = !manualOverride;
-    toggleWindow();  // Toggle manually
+    counter = 0;
+    manualOverride = true;
+    toggleWindow();
+
+    while (digitalRead(BUTTON_PIN) == HIGH) {
+      delay(500);
+      counter++;
+      if (counter > 10) {
+        manualOverride = false;
+        lcd.setCursor(0, 1);
+        lcd.print("AUTOMATIC DONE");
+      }
+    }
   }
 
   if (!manualOverride) {
-    // Automatic control based on temperature
     if (temp >= 30 && !windowOpen) {
       openWindow();
     } else if (temp <= 28 && windowOpen) {
