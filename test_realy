@@ -1,197 +1,96 @@
+#include <DHT.h>
+#include <Servo.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
 
-#include <WiFi.h>
-#include <WiFiClientSecure.h>
-#include <HTTPClient.h>
-#include "esp_camera.h"
+#define DHTPIN 2
+#define DHTTYPE DHT11
+#define BUTTON_PIN 5
+#define SERVO_PIN 6
 
-// Replace with your WiFi credentials
-const char* ssid = "Ahmed";
-const char* password = "#1288534459&4274321#ahmed";
+DHT dht(DHTPIN, DHTTYPE);
+Servo windowServo;
+LiquidCrystal_I2C lcd(0x27, 16, 2);
 
-// Supabase Credentials
-const char* supabase_url = "https://xakahklkfirpoanswpep.supabase.co";                                                                                                                                                                                         // Replace with your Supabase URL
-const char* supabase_api_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhha2Foa2xrZmlycG9hbnN3cGVwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTczODU4MTcwNywiZXhwIjoyMDU0MTU3NzA3fQ.prhjteKenS6Io84AZ5eTBnZ8fowFt6SZ2afmFrk6qt4";  // Replace with your API key
-const char* storage_bucket = "firecar";
-
-long id = 0;  // Bucket name
-
-// Serial communication with Arduino
-#define RX_PIN 16  // Connect to Arduino TX
-#define TX_PIN 17  // Connect to Arduino RX
-#define FLASH_LED_PIN 4
-
-// void startCameraServer();
-WiFiClient client;
-
-// Camera configuration
-#define PWDN_GPIO_NUM 32
-#define RESET_GPIO_NUM -1
-#define XCLK_GPIO_NUM 0
-#define SIOD_GPIO_NUM 26
-#define SIOC_GPIO_NUM 27
-#define Y9_GPIO_NUM 35
-#define Y8_GPIO_NUM 34
-#define Y7_GPIO_NUM 39
-#define Y6_GPIO_NUM 36
-#define Y5_GPIO_NUM 21
-#define Y4_GPIO_NUM 19
-#define Y3_GPIO_NUM 18
-#define Y2_GPIO_NUM 5
-#define VSYNC_GPIO_NUM 25
-#define HREF_GPIO_NUM 23
-#define PCLK_GPIO_NUM 22
+bool windowOpen = false;
+bool manualOverride = false;
+bool lastButtonState = LOW;
+unsigned long lastDebounceTime = 0;
+unsigned long debounceDelay = 50;
 
 void setup() {
   Serial.begin(9600);
-  Serial.setRxBufferSize(1024);
-
-  pinMode(FLASH_LED_PIN, OUTPUT);
-  digitalWrite(FLASH_LED_PIN, LOW);  // Ensure it's OFF at startup
-
-  // Initialize WiFi
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("\nWiFi Connected");
-
-  digitalWrite(FLASH_LED_PIN, HIGH);  // Turn ON flash
-  delay(1000);
-  digitalWrite(FLASH_LED_PIN, LOW);  // Turn off flash
-  delay(1000);
-  digitalWrite(FLASH_LED_PIN, HIGH);  // Turn ON flash
-  delay(1000);
-  digitalWrite(FLASH_LED_PIN, LOW);  // Turn off flash
-
-  setupCamera();
+  dht.begin();
+  windowServo.attach(SERVO_PIN);
+  pinMode(BUTTON_PIN, INPUT);
+  
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("Smart Window");
+  delay(2000);
+  lcd.clear();
 }
 
 void loop() {
+  float temp = dht.readTemperature();
+  bool buttonState = digitalRead(BUTTON_PIN);
 
-  if (Serial.available()) {
-    String command = Serial.readStringUntil('\n');
-    command.trim();
+  // Debounce button
+  if (buttonState != lastButtonState) {
+    lastDebounceTime = millis();
+  }
 
-    if (command == "CAPTURE") {
-      id = millis();
-      Serial.print("img_id_to_upload");
-      Serial.println(id);
-      captureAndUpload();
+  if ((millis() - lastDebounceTime) > debounceDelay) {
+    // On rising edge of button press
+    if (buttonState == HIGH && lastButtonState == LOW) {
+      manualOverride = !manualOverride;
+      toggleWindow();  // Toggle manually
     }
   }
-  delay(500);
-}
-// Function to initialize the camera
-void setupCamera() {
-  // Initialize the camera
-  camera_config_t config;
-  config.ledc_channel = LEDC_CHANNEL_0;
-  config.ledc_timer = LEDC_TIMER_0;
-  config.pin_d0 = Y2_GPIO_NUM;
-  config.pin_d1 = Y3_GPIO_NUM;
-  config.pin_d2 = Y4_GPIO_NUM;
-  config.pin_d3 = Y5_GPIO_NUM;
-  config.pin_d4 = Y6_GPIO_NUM;
-  config.pin_d5 = Y7_GPIO_NUM;
-  config.pin_d6 = Y8_GPIO_NUM;
-  config.pin_d7 = Y9_GPIO_NUM;
-  config.pin_xclk = XCLK_GPIO_NUM;
-  config.pin_pclk = PCLK_GPIO_NUM;
-  config.pin_vsync = VSYNC_GPIO_NUM;
-  config.pin_href = HREF_GPIO_NUM;
-  config.pin_sscb_sda = SIOD_GPIO_NUM;
-  config.pin_sscb_scl = SIOC_GPIO_NUM;
-  config.pin_pwdn = PWDN_GPIO_NUM;
-  config.pin_reset = RESET_GPIO_NUM;
-  config.xclk_freq_hz = 20000000;
-  config.pixel_format = PIXFORMAT_JPEG;
+  lastButtonState = buttonState;
 
-  if (psramFound()) {
-    config.frame_size = FRAMESIZE_UXGA;
-    config.jpeg_quality = 10;
-    config.fb_count = 2;
-  } else {
-    config.frame_size = FRAMESIZE_SVGA;
-    config.jpeg_quality = 12;
-    config.fb_count = 1;
-  }
-
-  // Camera init
-  esp_err_t err = esp_camera_init(&config);
-  if (err != ESP_OK) {
-    Serial.printf("Camera init failed with error 0x%x", err);
-    return;
-  }
-}
-
-// Flush camera buffer to clear old frames
-void flushCameraBuffer() {
-  camera_fb_t* fb = NULL;
-  for (int i = 0; i < 5; i++) {  // Capture multiple frames to remove old data
-    fb = esp_camera_fb_get();
-    if (fb) {
-      esp_camera_fb_return(fb);
+  if (!manualOverride) {
+    // Automatic control based on temperature
+    if (temp >= 30 && !windowOpen) {
+      openWindow();
+    } else if (temp <= 28 && windowOpen) {
+      closeWindow();
     }
-    delay(100);
   }
+
+  // Display on LCD
+  lcd.setCursor(0, 0);
+  lcd.print("Temp: ");
+  if (isnan(temp)) {
+    lcd.print("Error ");
+  } else {
+    lcd.print(temp);
+    lcd.print((char)223); // degree symbol
+    lcd.print("C ");
+  }
+
+  lcd.setCursor(0, 1);
+  lcd.print("Window: ");
+  lcd.print(windowOpen ? "Open  " : "Closed");
+
+  delay(500); // Reduce flickering and DHT reading interval
 }
 
-
-void captureAndUpload() {
-  // Capture Image
-  digitalWrite(FLASH_LED_PIN, HIGH);  // Turn ON flash
-  delay(100);                         // Small delay to ensure proper lighting
-  flushCameraBuffer();
-
-  camera_fb_t* fb = esp_camera_fb_get();
-  if (!fb) {
-    Serial.println("Camera capture failed");
-    return;
-  }
-  digitalWrite(FLASH_LED_PIN, LOW);  // Turn OFF flash after capture
-
-  // Upload Image to Supabase
-  String imageName = String(id) + ".jpg";
-  String imageUrl = uploadToSupabase(fb->buf, fb->len, imageName);
-
-  if (imageUrl != "") {
-    // Serial.println("Image Uploaded Successfully!");
-    // Serial.println("Image URL: " + imageUrl);
-  } else {
-    Serial.println("Upload Failed!");
-  }
-
-  // Free Memory
-  esp_camera_fb_return(fb);
+void openWindow() {
+  windowServo.write(150); // Adjust angle if needed
+  windowOpen = true;
 }
 
-String uploadToSupabase(uint8_t* imageData, size_t imageLength, String imageName) {
-  WiFiClientSecure client;
-  HTTPClient http;
+void closeWindow() {
+  windowServo.write(0);
+  windowOpen = false;
+}
 
-  client.setInsecure();  // Ignore SSL certificate
-
-  String url = String(supabase_url) + "/storage/v1/object/" + storage_bucket + "/" + imageName;
-  // Serial.println("Uploading to: " + url);
-
-  http.begin(client, url);
-  http.addHeader("Authorization", "Bearer " + String(supabase_api_key));
-  http.addHeader("Content-Type", "image/jpeg");
-
-  int httpResponseCode = http.PUT(imageData, imageLength);
-  // Serial.print("Response code: ");
-  // Serial.println(httpResponseCode);
-
-  if (httpResponseCode > 0) {
-    // Serial.print("HTTP Response code: ");
-    // Serial.println(httpResponseCode);
-    http.end();
-    return String(supabase_url) + "/storage/v1/object/public/" + storage_bucket + "/" + imageName;
+void toggleWindow() {
+  if (windowOpen) {
+    closeWindow();
   } else {
-    // Serial.print("Error on sending POST: ");
-    // Serial.println(http.errorToString(httpResponseCode).c_str());
-    http.end();
-    return "";
+    openWindow();
   }
 }
