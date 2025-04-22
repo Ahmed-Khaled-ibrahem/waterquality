@@ -1,99 +1,89 @@
-#include <DHT.h>
-#include <Servo.h>
-#include <Wire.h>
-#include <LiquidCrystal_I2C.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
 
-#define DHTPIN 2
-#define DHTTYPE DHT11
-#define BUTTON_PIN 5
-#define SERVO_PIN 6
+#define relayPin 32
+// BLE variables
+BLEServer* pServer = NULL;
+BLECharacteristic* pCharacteristic = NULL;
+bool deviceConnected = false;
 
-DHT dht(DHTPIN, DHTTYPE);
-Servo windowServo;
-LiquidCrystal_I2C lcd(0x27, 16, 2);
+// Define UUIDs for BLE service and characteristic
+#define SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 
-bool windowOpen = false;
-bool manualOverride = false;
-bool lastButtonState = LOW;
-unsigned long lastDebounceTime = 0;
-unsigned long debounceDelay = 50;
-int counter = 0;
+void runRelay() {
+  digitalWrite(relayPin, HIGH);
+  delay(500);
+  digitalWrite(relayPin, LOW);
+}
+
+class MyServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer* pServer) {
+    deviceConnected = true;
+    Serial.println("Device connected");
+  }
+
+  void onDisconnect(BLEServer* pServer) {
+    deviceConnected = false;
+    Serial.println("Device disconnected");
+    pServer->startAdvertising();  // Restart advertising
+  }
+};
+
+class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* pCharacteristic) {
+    uint8_t* value = pCharacteristic->getData();   
+    size_t length = pCharacteristic->getLength(); 
+
+    Serial.print("Received value (length): ");
+    Serial.println(length);
+    Serial.print("Received value (raw): ");
+    for (size_t i = 0; i < length; i++) {
+      Serial.print(value[i], HEX);
+      Serial.print(" ");
+    }
+    Serial.println();
+
+    bool isOpenCommand = (length == 1 && value[0] == 'O');
+
+    if (isOpenCommand) {
+      Serial.println("Command received! sending to garage...");
+      runRelay();
+    } else {
+      Serial.println("Invalid command or state");
+    }
+  }
+};
 
 void setup() {
-  Serial.begin(9600);
-  dht.begin();
-  windowServo.attach(SERVO_PIN);
-  pinMode(BUTTON_PIN, INPUT);
+  Serial.begin(115200);
 
-  lcd.init();
-  lcd.backlight();
-  lcd.setCursor(0, 0);
-  lcd.print("Smart Window");
-  delay(2000);
-  lcd.clear();
+  pinMode(relayPin, OUTPUT);
+  delay(1000);
+  digitalWrite(relayPin, LOW);
+
+  // Initialize BLE
+  BLEDevice::init("GarageDoor");
+  pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+
+  BLEService* pService = pServer->createService(SERVICE_UUID);
+  pCharacteristic = pService->createCharacteristic(
+    CHARACTERISTIC_UUID,
+    BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
+  pCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
+
+  // Set initial value
+  pCharacteristic->setValue("Ready");
+
+  pService->start();
+  BLEAdvertising* pAdvertising = pServer->getAdvertising();
+  pAdvertising->start();
+  Serial.println("BLE Server started, waiting for connections...");
 }
 
 void loop() {
-  float temp = dht.readTemperature();
-  bool buttonState = digitalRead(BUTTON_PIN);
-  Serial.println(buttonState);
-
-  if (digitalRead(BUTTON_PIN) == HIGH) {
-    counter = 0;
-    manualOverride = true;
-    toggleWindow();
-
-    while (digitalRead(BUTTON_PIN) == HIGH) {
-      delay(500);
-      counter++;
-      if (counter > 10) {
-        manualOverride = false;
-        lcd.setCursor(0, 1);
-        lcd.print("AUTOMATIC DONE");
-      }
-    }
-  }
-
-  if (!manualOverride) {
-    if (temp >= 30 && !windowOpen) {
-      openWindow();
-    } else if (temp <= 28 && windowOpen) {
-      closeWindow();
-    }
-  }
-
-  // Display on LCD
-  lcd.setCursor(0, 0);
-  lcd.print("Temp: ");
-  if (isnan(temp)) {
-    lcd.print("Error ");
-  } else {
-    lcd.print(temp);
-    lcd.print((char)223);  // degree symbol
-    lcd.print("C ");
-  }
-
-  lcd.setCursor(0, 1);
-  lcd.print("Window: ");
-  lcd.print(windowOpen ? "Open  " : "Closed");
-
-  delay(500);  // Reduce flickering and DHT reading interval
-}
-
-void openWindow() {
-  windowServo.write(150);  // Adjust angle if needed
-  windowOpen = true;
-}
-
-void closeWindow() {
-  windowServo.write(0);
-  windowOpen = false;
-}
-
-void toggleWindow() {
-  if (windowOpen) {
-    closeWindow();
-  } else {
-    openWindow();
-  }
+  delay(100);
 }
