@@ -5,7 +5,7 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 const int relayPin = 8;
 const int forceSensorPin = A0;
-int forceThreshold = 5;
+int forceThreshold = 50;
 
 unsigned long startTime = 0;
 bool reading = false;
@@ -22,12 +22,6 @@ void setup() {
 
 void loop() {
   int forceValue = analogRead(forceSensorPin);
-  Serial.println(forceValue);
-  lcd.setCursor(0, 1);
-  lcd.print("  ");
-  lcd.print(String(forceValue));
-  lcd.print("  ");
-
 
   if (forceValue > forceThreshold) {
     if (!reading) {
@@ -67,5 +61,5 @@ void loop() {
     lcd.print("Ready :)");
   }
 
-  delay(200);
+  delay(500);
 }
