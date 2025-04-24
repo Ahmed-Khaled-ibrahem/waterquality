@@ -6,7 +6,7 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 const int relayPin = 8;
 const int forceSensorPin = A0;
-int forceThreshold = 100;
+int forceThreshold = 50;
 
 unsigned long startTime = 0;
 bool reading = false;
@@ -37,7 +37,8 @@ void loop() {
     int seconds = elapsed % 60;
 
     lcd.setCursor(0, 0);
-    lcd.print("Reading...");
+    lcd.print("Reading");
+    lcd.print(forceValue);
     lcd.setCursor(0, 1);
     lcd.print(minutes);
     lcd.print(" m  ");
