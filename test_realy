@@ -22,6 +22,9 @@ void setup() {
 
 void loop() {
   int forceValue = analogRead(forceSensorPin);
+  lcd.setCursor(0, 1);
+  lcd.print(forceValue + "   ");
+
 
   if (forceValue > forceThreshold) {
     if (!reading) {
@@ -61,5 +64,5 @@ void loop() {
     lcd.print("Ready :)");
   }
 
-  delay(500); 
+  delay(1000);
 }
