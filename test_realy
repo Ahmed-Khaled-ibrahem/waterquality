@@ -18,12 +18,15 @@ void setup() {
   lcd.backlight();
   lcd.setCursor(0, 0);
   lcd.print("Ready");
+  Serial.begin(9600);
 }
 
 void loop() {
   int forceValue = analogRead(forceSensorPin);
+  Serial.println(forceValue);
   lcd.setCursor(0, 1);
-  lcd.print(forceValue + "   ");
+  lcd.print(forceValue);
+  lcd.print("  ");
 
 
   if (forceValue > forceThreshold) {
