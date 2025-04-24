@@ -1,7 +1,6 @@
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 
-// LCD address and size
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 const int relayPin = 8;
@@ -25,6 +24,7 @@ void loop() {
   int forceValue = analogRead(forceSensorPin);
   Serial.println(forceValue);
   lcd.setCursor(0, 1);
+  lcd.print("  ");
   lcd.print(String(forceValue));
   lcd.print("  ");
 
@@ -67,5 +67,5 @@ void loop() {
     lcd.print("Ready :)");
   }
 
-  delay(1000);
+  delay(200);
 }
