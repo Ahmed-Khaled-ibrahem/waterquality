@@ -1,46 +1,291 @@
-import socket
-import csv
-import time
-from datetime import datetime
+#include <Wire.h>
+#include <DHT.h>
+#include <SoftwareSerial.h>
+#include <Servo.h>
+#include <TinyGPS++.h>
 
-# UDP settings
-UDP_IP = "0.0.0.0"  # Listen on all interfaces
-UDP_PORT = 12345
+#define DHTPIN 2
+#define DHTTYPE DHT22
+DHT dht(DHTPIN, DHTTYPE);
 
-# CSV file setup
-CSV_FILE = "sensor_data.csv"
+#define FIRE_SENSOR_1 A0
+#define FIRE_SENSOR_2 A1
+#define FIRE_SENSOR_3 A2
+#define FIRE_SENSOR_4 A3
+#define FIRE_SENSOR_5 A4
+#define TRIG_PIN 3
+#define ECHO_PIN 4
+#define RELAY_PIN 24
+#define SERVO_PIN 6
+#define MOTOR1_IN1 7
+#define MOTOR1_IN2 8
+#define MOTOR2_IN1 9
+#define MOTOR2_IN2 10
+#define GPS_TX 22
+#define GPS_RX 23
+#define ESP_CAM_TX 26
+#define ESP_CAM_RX 27  
 
-# Create CSV file with headers if it doesn't exist
-with open(CSV_FILE, mode='a', newline='') as file:
-    writer = csv.writer(file)
-    if file.tell() == 0:  # File is empty
-        writer.writerow(["Timestamp", "Temperature (C)", "Humidity (%)", "UV Index"])
+SoftwareSerial gpsSerial(GPS_TX, GPS_RX);
+SoftwareSerial espCam(ESP_CAM_TX, ESP_CAM_RX);
+Servo myServo;
+String location = "";
+TinyGPSPlus gps;
 
-# Set up UDP socket
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.bind((UDP_IP, UDP_PORT))
+float temperature = 0;
+float humidity = 0;
+String lastLink = "";
+int fireDetected1 = 0;
+int fireDetected2 = 0;
+int fireDetected3 = 0;
+int fireDetected4 = 0;
+int fireDetected5 = 0;
+float distance = 100;
+long duration = 0;
+int triggerValue = 0;
 
-print("Listening for sensor data...")
+void setup() {
+  Serial.begin(9600);
+  dht.begin();
+  pinMode(FIRE_SENSOR_1, INPUT);
+  pinMode(FIRE_SENSOR_2, INPUT);
+  pinMode(FIRE_SENSOR_3, INPUT);
+  pinMode(FIRE_SENSOR_4, INPUT);
+  pinMode(FIRE_SENSOR_5, INPUT);
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  pinMode(RELAY_PIN, OUTPUT);
+  pinMode(MOTOR1_IN1, OUTPUT);
+  pinMode(MOTOR1_IN2, OUTPUT);
+  pinMode(MOTOR2_IN1, OUTPUT);
+  pinMode(MOTOR2_IN2, OUTPUT);
 
-while True:
-    try:
-        # Receive data
-        data, addr = sock.recvfrom(1024)
-        data_str = data.decode()
+  myServo.attach(SERVO_PIN);
 
-        # Parse data
-        temp, hum, uv = map(float, data_str.split(','))
+  gpsSerial.begin(9600);
+  espCam.begin(9600);
 
-        # Get current timestamp
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+  digitalWrite(RELAY_PIN, LOW);
+  Serial.println("Code is Starting");
+}
 
-        # Display data
-        print(f"{timestamp} | Temp: {temp}°C, Humidity: {hum}%, UV Index: {uv}")
+void loop() {
 
-        # Write to CSV
-        with open(CSV_FILE, mode='a', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow([timestamp, temp, hum, uv])
+  temperature = dht.readTemperature();
+  humidity = dht.readHumidity();
 
-    except Exception as e:
-        print("Error:", e)
+  log_dht();
+
+  fireDetected1 = analogRead(FIRE_SENSOR_1);
+  fireDetected2 = analogRead(FIRE_SENSOR_2);
+  fireDetected3 = analogRead(FIRE_SENSOR_3);
+  fireDetected4 = analogRead(FIRE_SENSOR_4);
+  fireDetected5 = analogRead(FIRE_SENSOR_5);
+
+  log_fire_sensor();
+
+  distance = getUltrasonicDistance();
+
+  log_distance();
+
+  if (distance < 20) {
+    avoidObstacle();
+  } else {
+    moveForward();
+  }
+
+  if (Serial.available()) {
+    String command = Serial.readStringUntil('\n');  // Read input until newline
+    command.trim();                                 // Remove any whitespace or newlines
+
+    if (command == "fire") {
+      fireDetected1 = 600;
+    }
+  }
+
+  getGPS();
+
+  triggerValue = 300;
+
+  if (fireDetected1 > triggerValue || fireDetected2 > triggerValue || fireDetected3 > triggerValue || fireDetected4 > triggerValue || fireDetected5 > triggerValue) {
+    Serial.println("Fire detected!");
+    stopMotors();
+
+    int fireValues[5] = { fireDetected1, fireDetected2, fireDetected3, fireDetected4, fireDetected5 };
+    int maxIndex = 0;
+    int maxValue = fireValues[0];
+
+    for (int i = 1; i < 5; i++) {
+      if (fireValues[i] > maxValue) {
+        maxValue = fireValues[i];
+        maxIndex = i;
+      }
+    }
+
+    int servo_angles[5] = { 60, 80, 90, 100, 120 };
+    myServo.write(servo_angles[maxIndex]);
+
+    lastLink = takePhoto();
+
+    String text = getMessage();
+    Serial.println(text);
+    // // sendAlert(text);
+    activateWaterPump();
+    delay(2000);
+    myServo.write(90);
+  }
+
+  delay(1000);
+}
+
+void log_dht() {
+  Serial.print("temperature : ");
+  Serial.println(temperature);
+  Serial.print("humidity : ");
+  Serial.println(humidity);
+}
+void log_fire_sensor() {
+  Serial.print("fire Sensor : ");
+  Serial.print(fireDetected1);
+  Serial.print(", ");
+  Serial.print(fireDetected2);
+  Serial.print(", ");
+  Serial.print(fireDetected3);
+  Serial.print(", ");
+  Serial.print(fireDetected4);
+  Serial.print(", ");
+  Serial.print(fireDetected5);
+  Serial.println(" ");
+}
+void log_distance() {
+  Serial.print("distance : ");
+  Serial.println(distance);
+}
+
+String getMessage() {
+  return "Fire detected! \n"
+         "Location : "
+         + String(getGPS()) + "\n"
+                              "Temperature : "
+         + String(temperature) + "\n"
+                                 "Humidity : "
+         + String(humidity) + "\n"
+                              "Photo Link : "
+         + "https://xakahklkfirpoanswpep.supabase.co/storage/v1/object/public/firecar//" + lastLink + ".jpg";
+         //https://xakahklkfirpoanswpep.supabase.co/storage/v1/object/public/firecar//0.jpg
+}
+
+String getGPS() {
+
+  while (gpsSerial.available() > 0) {
+    gps.encode(gpsSerial.read());
+  }
+
+  if (gps.location.isUpdated()) {
+    Serial.print("LAT: ");
+    Serial.println(gps.location.lat(), 6);
+    Serial.print("LONG: ");
+    Serial.println(gps.location.lng(), 6);
+    Serial.print("SPEED (km/h) = ");
+    Serial.println(gps.speed.kmph());
+    Serial.print("Satellites = ");
+    Serial.println(gps.satellites.value());
+    Serial.print("Time in UTC: ");
+    Serial.println(String(gps.date.year()) + "/" + String(gps.date.month()) + "/" + String(gps.date.day()) + "," + String(gps.time.hour()) + ":" + String(gps.time.minute()) + ":" + String(gps.time.second()));
+    Serial.println("");
+
+    location = String(gps.location.lat()) + "  " + String(gps.location.lng());
+  }
+
+  return location;
+}
+
+String takePhoto() {
+
+  String str_id = "0";
+
+  Serial.println("Capturing Photo...");
+  espCam.flush();
+  espCam.readString();
+  espCam.println("CAPTURE");
+  delay(1500);
+
+  if (espCam.available()) {
+    String response = espCam.readString();
+    int index = response.indexOf("img_id_to_upload");
+    String newz = response.substring(index + 16);
+    Serial.println(newz);
+    str_id = newz;
+  }
+
+  return str_id;
+}
+
+void activateWaterPump() {
+  Serial.println("pump is runninig");
+  digitalWrite(RELAY_PIN, HIGH);
+  delay(5000);
+  digitalWrite(RELAY_PIN, LOW);
+}
+
+void moveForward() {
+  digitalWrite(MOTOR1_IN1, HIGH);
+  digitalWrite(MOTOR1_IN2, LOW);
+  digitalWrite(MOTOR2_IN1, HIGH);
+  digitalWrite(MOTOR2_IN2, LOW);
+}
+void stopMotors() {
+  digitalWrite(MOTOR1_IN1, LOW);
+  digitalWrite(MOTOR1_IN2, LOW);
+  digitalWrite(MOTOR2_IN1, LOW);
+  digitalWrite(MOTOR2_IN2, LOW);
+}
+float getUltrasonicDistance() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(5);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+  pinMode(ECHO_PIN, INPUT);
+  duration = pulseIn(ECHO_PIN, HIGH);
+  return duration * 0.034 / 2;
+}
+void avoidObstacle() {
+  Serial.println("Obstacle detected! Avoiding...");
+  stopMotors();
+  myServo.write(0);
+  delay(4000);
+  float leftDistance = getUltrasonicDistance();
+  myServo.write(180);
+  delay(4000);
+  float rightDistance = getUltrasonicDistance();
+  myServo.write(90);
+
+  if (leftDistance > rightDistance) {
+    turnLeft();
+  } else {
+    turnRight();
+  }
+}
+
+void turnLeft() {
+  Serial.println("Turning Left");
+  digitalWrite(MOTOR1_IN1, LOW);
+  digitalWrite(MOTOR1_IN2, HIGH);
+  digitalWrite(MOTOR2_IN1, HIGH);
+  digitalWrite(MOTOR2_IN2, LOW);
+  delay(3000);
+  moveForward();
+}
+
+void turnRight() {
+  Serial.println("Turning Right");
+  digitalWrite(MOTOR1_IN1, HIGH);
+  digitalWrite(MOTOR1_IN2, LOW);
+  digitalWrite(MOTOR2_IN1, LOW);
+  digitalWrite(MOTOR2_IN2, HIGH);
+  delay(3000);
+  moveForward();
+}
+
+
