@@ -21,12 +21,9 @@ DHT dht(DHTPIN, DHTTYPE);
 #define MOTOR1_IN2 8
 #define MOTOR2_IN1 9
 #define MOTOR2_IN2 10
-#define GPS_TX 22
-#define GPS_RX 23
 #define ESP_CAM_TX 26
-#define ESP_CAM_RX 27  
+#define ESP_CAM_RX 27
 
-SoftwareSerial gpsSerial(GPS_TX, GPS_RX);
 SoftwareSerial espCam(ESP_CAM_TX, ESP_CAM_RX);
 Servo myServo;
 String location = "";
@@ -43,6 +40,7 @@ int fireDetected5 = 0;
 float distance = 100;
 long duration = 0;
 int triggerValue = 0;
+unsigned long last_log_data = 0;
 
 void setup() {
   Serial.begin(9600);
@@ -62,7 +60,7 @@ void setup() {
 
   myServo.attach(SERVO_PIN);
 
-  gpsSerial.begin(9600);
+  Serial1.begin(9600);
   espCam.begin(9600);
 
   digitalWrite(RELAY_PIN, LOW);
@@ -74,19 +72,23 @@ void loop() {
   temperature = dht.readTemperature();
   humidity = dht.readHumidity();
 
-  log_dht();
-
   fireDetected1 = analogRead(FIRE_SENSOR_1);
   fireDetected2 = analogRead(FIRE_SENSOR_2);
   fireDetected3 = analogRead(FIRE_SENSOR_3);
   fireDetected4 = analogRead(FIRE_SENSOR_4);
   fireDetected5 = analogRead(FIRE_SENSOR_5);
 
-  log_fire_sensor();
-
   distance = getUltrasonicDistance();
 
-  log_distance();
+  getGPS();
+
+  if (millis() - last_log_data > 1500) {
+    last_log_data = millis();
+    log_dht();
+    log_fire_sensor();
+    log_distance();
+    Serial.println(location);
+  }
 
   if (distance < 20) {
     avoidObstacle();
@@ -102,8 +104,6 @@ void loop() {
       fireDetected1 = 600;
     }
   }
-
-  getGPS();
 
   triggerValue = 300;
 
@@ -134,8 +134,6 @@ void loop() {
     delay(2000);
     myServo.write(90);
   }
-
-  delay(1000);
 }
 
 void log_dht() {
@@ -161,7 +159,6 @@ void log_distance() {
   Serial.print("distance : ");
   Serial.println(distance);
 }
-
 String getMessage() {
   return "Fire detected! \n"
          "Location : "
@@ -172,34 +169,19 @@ String getMessage() {
          + String(humidity) + "\n"
                               "Photo Link : "
          + "https://xakahklkfirpoanswpep.supabase.co/storage/v1/object/public/firecar//" + lastLink + ".jpg";
-         //https://xakahklkfirpoanswpep.supabase.co/storage/v1/object/public/firecar//0.jpg
+  //https://xakahklkfirpoanswpep.supabase.co/storage/v1/object/public/firecar//0.jpg
 }
-
 String getGPS() {
 
-  while (gpsSerial.available() > 0) {
-    gps.encode(gpsSerial.read());
-  }
-
-  if (gps.location.isUpdated()) {
-    Serial.print("LAT: ");
-    Serial.println(gps.location.lat(), 6);
-    Serial.print("LONG: ");
-    Serial.println(gps.location.lng(), 6);
-    Serial.print("SPEED (km/h) = ");
-    Serial.println(gps.speed.kmph());
-    Serial.print("Satellites = ");
-    Serial.println(gps.satellites.value());
-    Serial.print("Time in UTC: ");
-    Serial.println(String(gps.date.year()) + "/" + String(gps.date.month()) + "/" + String(gps.date.day()) + "," + String(gps.time.hour()) + ":" + String(gps.time.minute()) + ":" + String(gps.time.second()));
-    Serial.println("");
-
-    location = String(gps.location.lat()) + "  " + String(gps.location.lng());
+  while (Serial1.available() > 0) {
+    gps.encode(Serial1.read());
+    if (gps.location.isUpdated()) {
+      location = String(gps.location.lat()) + "  " + String(gps.location.lng());
+    }
   }
 
   return location;
 }
-
 String takePhoto() {
 
   String str_id = "0";
@@ -220,14 +202,12 @@ String takePhoto() {
 
   return str_id;
 }
-
 void activateWaterPump() {
   Serial.println("pump is runninig");
   digitalWrite(RELAY_PIN, HIGH);
   delay(5000);
   digitalWrite(RELAY_PIN, LOW);
 }
-
 void moveForward() {
   digitalWrite(MOTOR1_IN1, HIGH);
   digitalWrite(MOTOR1_IN2, LOW);
@@ -267,7 +247,6 @@ void avoidObstacle() {
     turnRight();
   }
 }
-
 void turnLeft() {
   Serial.println("Turning Left");
   digitalWrite(MOTOR1_IN1, LOW);
@@ -277,7 +256,6 @@ void turnLeft() {
   delay(3000);
   moveForward();
 }
-
 void turnRight() {
   Serial.println("Turning Right");
   digitalWrite(MOTOR1_IN1, HIGH);
@@ -287,5 +265,3 @@ void turnRight() {
   delay(3000);
   moveForward();
 }
-
-
