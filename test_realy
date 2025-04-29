@@ -1,79 +1,46 @@
-#include <WiFi.h>
-#include <WiFiUdp.h>
-#include <DHT.h>
+import socket
+import csv
+import time
+from datetime import datetime
 
-// Wi-Fi credentials (laptop hotspot)
-const char* ssid = "DarkMatter";    // Replace with laptop hotspot SSID
-const char* password = "12345678";  // Replace with hotspot password
+# UDP settings
+UDP_IP = "0.0.0.0"  # Listen on all interfaces
+UDP_PORT = 12345
 
-// UDP settings
-const char* udpAddress = "255.255.255.255";  // Broadcast to network
-const int udpPort = 12345;
+# CSV file setup
+CSV_FILE = "sensor_data.csv"
 
-// Sensor pins
-#define DHT_PIN 4       // GPIO 4 for DHT11/DHT22
-#define UV_PIN 34       // GPIO 34 for GUVA-S12SD (ADC)
-#define DHT_TYPE DHT11  // Use DHT11 for DHT11 sensor
+# Create CSV file with headers if it doesn't exist
+with open(CSV_FILE, mode='a', newline='') as file:
+    writer = csv.writer(file)
+    if file.tell() == 0:  # File is empty
+        writer.writerow(["Timestamp", "Temperature (C)", "Humidity (%)", "UV Index"])
 
-// Initialize DHT sensor
-DHT dht(DHT_PIN, DHT_TYPE);
+# Set up UDP socket
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.bind((UDP_IP, UDP_PORT))
 
-// Initialize UDP
-WiFiUDP udp;
+print("Listening for sensor data...")
 
-void setup() {
-  // Start serial for debugging
-  Serial.begin(115200);
+while True:
+    try:
+        # Receive data
+        data, addr = sock.recvfrom(1024)
+        data_str = data.decode()
 
-  // Initialize DHT sensor
-  dht.begin();
+        # Parse data
+        temp, hum, uv = map(float, data_str.split(','))
 
-  // Connect to Wi-Fi
-  WiFi.begin(ssid, password);
-  Serial.print("Connecting to Wi-Fi");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("\nConnected to Wi-Fi");
-  Serial.print("IP Address: ");
-  Serial.println(WiFi.localIP());
-}
+        # Get current timestamp
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-float readUVIndex() {
-  int adcValue = analogRead(UV_PIN);          // 0-4095
-  float voltage = (adcValue / 4095.0) * 3.3;  // Convert to voltage (0-3.3V)
-  // GUVA-S12SD: ~0.1V per UV index (approximate)
-  float uvIndex = voltage / 0.1;
-  return uvIndex;
-}
+        # Display data
+        print(f"{timestamp} | Temp: {temp}°C, Humidity: {hum}%, UV Index: {uv}")
 
-void loop() {
-  // Read DHT sensor
-  float temp = dht.readTemperature();
-  float hum = dht.readHumidity();
+        # Write to CSV
+        with open(CSV_FILE, mode='a', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow([timestamp, temp, hum, uv])
 
-  // Check if readings are valid
-  if (isnan(temp) || isnan(hum)) {
-    Serial.println("Failed to read from DHT sensor!");
-    temp = 0;
-    hum = 0;
-  }
-
-  // Read UV sensor
-  float uv = readUVIndex();
-  // Create data string
-
-  char data[50];
-  snprintf(data, sizeof(data), "%.1f,%.1f,%.1f", temp, hum, uv);
-
-  // Send data via UDP with explicit cast
-  udp.beginPacket(udpAddress, udpPort);
-  udp.write((uint8_t*)data, strlen(data));  // Cast to uint8_t* and specify length
-  udp.endPacket();
-
-  // Print to serial for debugging
-  Serial.printf("Sent: T=%.1fC, H=%.1f%%, UV=%.1f\n", temp, hum, uv);
-
-  delay(5000);  // Send every 5 seconds
-}
+    except Exception as e:
+        print("Error:", e)
