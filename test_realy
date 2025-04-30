@@ -1,455 +1,69 @@
-// #include "SD_MMC.h"
-#include <SD.h>
 #include "FS.h"
-#include "esp_camera.h"
-#include <WiFi.h>
-#include "ESPAsyncWebServer.h"
-#include <Wire.h>
-#include <MPU6050.h>
-#include <TinyGPS++.h>
-#include <HardwareSerial.h>
-#include "time.h"
-#include <Firebase_ESP_Client.h>
-#include "addons/TokenHelper.h"
-#include "addons/RTDBHelper.h"
+#include "SD_MMC.h"
 
-#define API_KEY "AIzaSyCUhIHqlPCT_ejLz1_XD8y5izLAwkOywyw"
-#define DATABASE_URL "https://final-project-822d0-default-rtdb.firebaseio.com/"
-#define MAIN_BRANCH "cars/"
+void listDir(fs::FS &fs, const char * dirname, uint8_t levels) {
+  Serial.printf("Listing directory: %s\n", dirname);
 
-// GPS Module
-#define RXD2 16  // GPS TX to ESP32-CAM GPIO16
-#define TXD2 12  // GPS RX to ESP32-CAM GPIO12
-#define SDA_PIN 15
-#define SCL_PIN 14
-
-// Camera configuration
-#define PWDN_GPIO_NUM 32
-#define RESET_GPIO_NUM -1
-#define XCLK_GPIO_NUM 0
-#define SIOD_GPIO_NUM 26
-#define SIOC_GPIO_NUM 27
-#define Y9_GPIO_NUM 35
-#define Y8_GPIO_NUM 34
-#define Y7_GPIO_NUM 39
-#define Y6_GPIO_NUM 36
-#define Y5_GPIO_NUM 21
-#define Y4_GPIO_NUM 19
-#define Y3_GPIO_NUM 18
-#define Y2_GPIO_NUM 5
-#define VSYNC_GPIO_NUM 25
-#define HREF_GPIO_NUM 23
-#define PCLK_GPIO_NUM 22
-
-const char *ssid = "Ahmed";
-const char *password = "#1288534459&4274321#ahmed";
-
-AsyncWebServer server(80);
-
-HardwareSerial gpsSerial(2);
-TinyGPSPlus gps;
-unsigned long last_gps_time = 0;
-
-MPU6050 mpu;
-int16_t ax, ay, az, gx, gy, gz;
-const float ACCIDENT_THRESHOLD = 3.0;  // Adjust based on testing
-
-volatile bool motionDetected = false;
-const int mpuIntPin = 13;  // INT pin from MPU to ESP32
-
-bool isRecording = false;
-File videoFile;
-
-unsigned long frameCnt = 0;
-unsigned long moviSize = 0;
-
-FirebaseData fbdo;
-FirebaseData fbdo1;
-FirebaseAuth auth;
-FirebaseConfig config;
-
-bool stream1Connected = false;
-bool signupOK = false;
-
-unsigned long last_mpu_time = 0;
-
-void IRAM_ATTR mpuInterrupt() {
-  motionDetected = true;
-}
-
-void setupCamera() {
-
-  // Initialize the camera
-  camera_config_t config;
-  config.ledc_channel = LEDC_CHANNEL_0;
-  config.ledc_timer = LEDC_TIMER_0;
-  config.pin_d0 = Y2_GPIO_NUM;
-  config.pin_d1 = Y3_GPIO_NUM;
-  config.pin_d2 = Y4_GPIO_NUM;
-  config.pin_d3 = Y5_GPIO_NUM;
-  config.pin_d4 = Y6_GPIO_NUM;
-  config.pin_d5 = Y7_GPIO_NUM;
-  config.pin_d6 = Y8_GPIO_NUM;
-  config.pin_d7 = Y9_GPIO_NUM;
-  config.pin_xclk = XCLK_GPIO_NUM;
-  config.pin_pclk = PCLK_GPIO_NUM;
-  config.pin_vsync = VSYNC_GPIO_NUM;
-  config.pin_href = HREF_GPIO_NUM;
-  config.pin_sscb_sda = SIOD_GPIO_NUM;
-  config.pin_sscb_scl = SIOC_GPIO_NUM;
-  config.pin_pwdn = PWDN_GPIO_NUM;
-  config.pin_reset = RESET_GPIO_NUM;
-  config.xclk_freq_hz = 20000000;
-  config.pixel_format = PIXFORMAT_JPEG;
-
-  if (psramFound()) {
-    config.frame_size = FRAMESIZE_VGA;
-    config.jpeg_quality = 10;
-    config.fb_count = 2;
-  } else {
-    config.frame_size = FRAMESIZE_SVGA;
-    config.jpeg_quality = 12;
-    config.fb_count = 1;
-  }
-
-  // Camera init
-  esp_err_t err = esp_camera_init(&config);
-  if (err != ESP_OK) {
-    Serial.printf("Camera init failed with error 0x%x", err);
+  File root = fs.open(dirname);
+  if (!root) {
+    Serial.println("Failed to open directory");
     return;
   }
-  Serial.println("... Camera is Working Fine");
-}
-
-void setupSDCard() {
-  if (!SD.begin()) {
-    Serial.println("SD Card Mount Failed");
-    return;
-  }
-  uint8_t cardType = SD.cardType();
-  if (cardType == CARD_NONE) {
-    Serial.println("No SD Card attached");
+  if (!root.isDirectory()) {
+    Serial.println("Not a directory");
     return;
   }
 
-  // Create folder
-  if (!SD.mkdir("/data")) {
-    Serial.println("Failed to create folder");
-    return;
-  }
-
-  Serial.println("... SD Card is working fine");
-}
-
-void mpu_setup() {
-
-  Wire.begin(SDA_PIN, SCL_PIN);
-  mpu.initialize();  // Initialize MPU6050
-
-  if (!mpu.testConnection()) {
-    Serial.println("MPU6050 Connection Failed!");
-  }
-  mpu.setMotionDetectionThreshold(2);  // Sensitivity
-  mpu.setMotionDetectionDuration(5);   // Duration
-  mpu.setIntMotionEnabled(true);       // Enable interrupt
-  attachInterrupt(digitalPinToInterrupt(mpuIntPin), mpuInterrupt, RISING);
-  Serial.println("... MPU is Working fine");
-}
-
-void connectToWIfi() {
-
-  Serial.println("Free heap: " + String(ESP.getFreeHeap()));
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("\nWiFi connected");
-  Serial.print("Camera Stream Ready! Go to: http://");
-  Serial.println(WiFi.localIP());
-}
-
-void gps_module() {
-
-  if (millis() - last_gps_time > 8000) {
-    last_gps_time = millis();
-    Serial.print("every 8 seconds");
-
-    while (gpsSerial.available() > 0) {
-      gps.encode(gpsSerial.read());
-    }
-
-    if (gps.location.isUpdated()) {
-      Serial.print("LAT: ");
-      Serial.println(gps.location.lat(), 6);
-      Serial.print("LONG: ");
-      Serial.println(gps.location.lng(), 6);
-      Serial.print("SPEED (km/h) = ");
-      Serial.println(gps.speed.kmph());
-      Serial.print("Satellites = ");
-      Serial.println(gps.satellites.value());
-      Serial.print("Time in UTC: ");
-      Serial.println(String(gps.date.year()) + "/" + String(gps.date.month()) + "/" + String(gps.date.day()) + "," + String(gps.time.hour()) + ":" + String(gps.time.minute()) + ":" + String(gps.time.second()));
-      Serial.println("");
-
-      // uploadValue("lat", String(gps.location.lat()));
-      // uploadValue("lng", String(gps.location.lng()));
-      // uploadValue("speed", String(gps.speed.kmph()));
-
-      // uploadGPSData(gps.location.lat(), gps.location.lng(), gps.speed.kmph());
-    }
-  }
-}
-
-void uploadGPSData(float lat, float lng, float speed) {
-  String deviceID = String(ESP.getEfuseMac()) + "/";
-  String path = MAIN_BRANCH + deviceID + "gps";
-
-  FirebaseJson json;
-  json.set("lat", lat);
-  json.set("lng", lng);
-  json.set("speed", speed);
-
-  if (Firebase.ready() && signupOK) {
-    if (Firebase.RTDB.setJSON(&fbdo, path.c_str(), &json)) {
-      Serial.println("GPS data uploaded:");
-      Serial.println(path);
-      Serial.println(json.raw());
-    } else {
-      Serial.println("FAILED to upload GPS JSON");
-      Serial.println("REASON: " + fbdo.errorReason());
-    }
-  }
-}
-
-void mpuModule() {
-
-  if (millis() - last_mpu_time > 5000) {
-    last_mpu_time = millis();
-    if (motionDetected) {
-      Serial.println("🚨 Motion/Accident Detected!");
-      motionDetected = false;
-      uploadValue("risk", "1");
-    }
-  }
-}
-
-void startRecording() {
-  // Get current time for filename
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo)) {
-    Serial.println("Failed to obtain time");
-    return;
-  }
-
-  char filename[32];
-  strftime(filename, sizeof(filename), "/%Y-%m-%d_%H-%M-%S.avi", &timeinfo);
-
-  // Open file for writing
-  videoFile = SD.open(filename, FILE_WRITE);
-  if (!videoFile) {
-    Serial.println("Failed to open file for recording");
-    return;
-  }
-
-  // Reset counters
-  frameCnt = 0;
-  moviSize = 0;
-
-  Serial.printf("Started recording: %s\n", filename);
-}
-
-void stopRecording() {
-  if (!videoFile) return;
-
-  videoFile.close();
-
-  Serial.println("Stopped recording");
-  Serial.printf("Recorded %d frames\n", frameCnt);
-}
-
-void captureFrame() {
-
-  frameCnt++;
-
-  camera_fb_t *fb = esp_camera_fb_get();
-  if (!fb) {
-    Serial.println("Camera capture failed");
-    return;
-  }
-
-  videoFile.write(fb->buf, fb->len);
-  esp_camera_fb_return(fb);
-}
-
-void setupWebServer() {
-  // List all video files
-  server.on("/videos", HTTP_GET, [](AsyncWebServerRequest *request) {
-    String output;
-    File root = SD.open("/");
-    File file = root.openNextFile();
-
-    while (file) {
-      if (String(file.name()).endsWith(".avi")) {
-        output += String(file.name()) + "\n";
-      }
-      file = root.openNextFile();
-    }
-
-    request->send(200, "text/plain", output);
-  });
-  // Download a video file
-  server.on("/download", HTTP_GET, [](AsyncWebServerRequest *request) {
-    if (request->hasParam("filename")) {
-      String filename = request->getParam("filename")->value();
-      if (SD.exists(filename)) {
-        request->send(SD, filename, "video/x-msvideo");
-      } else {
-        request->send(404, "text/plain", "File not found");
+  File file = root.openNextFile();
+  while (file) {
+    if (file.isDirectory()) {
+      Serial.print("DIR : ");
+      Serial.println(file.name());
+      if (levels) {
+        listDir(fs, file.name(), levels - 1);
       }
     } else {
-      request->send(400, "text/plain", "Filename parameter missing");
+      Serial.print("FILE: ");
+      Serial.print(file.name());
+      Serial.print("\tSIZE: ");
+      Serial.println(file.size());
     }
-  });
-  // Delete a video file
-  server.on("/delete", HTTP_GET, [](AsyncWebServerRequest *request) {
-    if (request->hasParam("filename")) {
-      String filename = request->getParam("filename")->value();
-      if (SD.exists(filename)) {
-        SD.remove(filename);
-        request->send(200, "text/plain", "File deleted");
-      } else {
-        request->send(404, "text/plain", "File not found");
-      }
-    } else {
-      request->send(400, "text/plain", "Filename parameter missing");
-    }
-  });
-
-  server.on("/test", HTTP_GET, [](AsyncWebServerRequest *request) {
-    camera_fb_t *fb = esp_camera_fb_get();
-    if (!fb) {
-      request->send(500, "text/plain", "Camera capture failed");
-      return;
-    }
-    request->send_P(200, "image/jpeg", fb->buf, fb->len);
-    esp_camera_fb_return(fb);
-  });
-
-  server.begin();
-}
-
-void firebaseSetup() {
-
-  config.api_key = API_KEY;
-  config.database_url = DATABASE_URL;
-  config.token_status_callback = tokenStatusCallback;
-
-  String email = "ESP" + String(ESP.getEfuseMac()) + "@gmail.com";
-  String password = String(ESP.getEfuseMac());
-
-  auth.user.email = email.c_str();
-  auth.user.password = password.c_str();
-
-  Serial.println("trying to login as ");
-  Serial.print("Email : ");
-  Serial.println(email);
-  Serial.print("Password : ");
-  Serial.println(password);
-
-  Firebase.begin(&config, &auth);
-
-  if (auth.token.uid.length() > 0) {
-    Serial.println("Login Successful!");
-    Serial.println("User UID: " + String(auth.token.uid.c_str()));
-    signupOK = true;
-  } else {
-    Serial.println("Login Failed. Trying to Sign Up...");
-  }
-
-  Firebase.reconnectWiFi(true);
-}
-
-void stream_handler() {
-  String deviceID = String(ESP.getEfuseMac());
-
-  if (stream1Connected && Firebase.ready()) {
-    if (Firebase.RTDB.readStream(&fbdo1)) {
-      if (fbdo1.streamAvailable()) {
-        Serial.println("Stream 1: Data changed");
-        if (fbdo1.dataType() == "int") {
-          int command = fbdo1.intData();
-          if (command == 1) {
-            startRecording();
-            isRecording = true;
-          }
-          if (command == 2) {
-            stopRecording();
-            isRecording = false;
-          }
-        }
-      }
-    } else {
-      Serial.println("Stream 1 error: " + fbdo1.errorReason());
-      stream1Connected = false;
-    }
-  }
-
-  if (!stream1Connected) {
-    String path = String("/") + MAIN_BRANCH + String(deviceID) + "/rec";
-    if (Firebase.RTDB.beginStream(&fbdo1, path)) {
-      Serial.println("Stream 1 connected");
-      stream1Connected = true;
-    } else {
-      Serial.println("Stream 1 failed: " + fbdo1.errorReason());
-    }
-  }
-}
-
-void uploadValue(String key, String val) {
-  String deviceID = String(ESP.getEfuseMac()) + "/";
-  upload(MAIN_BRANCH + deviceID + key, val);
-}
-
-void upload(String _path, String _value) {
-  if (Firebase.ready() && signupOK) {
-    if (Firebase.RTDB.setString(&fbdo, _path, _value)) {
-      Serial.print("firebase path : ");
-      Serial.print(_path);
-      Serial.print(" value : ");
-      Serial.println(_value);
-    } else {
-      Serial.println("FAILED");
-      Serial.println("REASON: " + fbdo.errorReason());
-    }
+    file = root.openNextFile();
   }
 }
 
 void setup() {
-
   Serial.begin(115200);
-  mpu_setup();
-  connectToWIfi();
-  Serial.println("Getting Time..");
-  configTime(0, 0, "pool.ntp.org");
-  setupCamera();
-  setupSDCard();
-  setupWebServer();
-  firebaseSetup();
-  Serial.println("Setup Ends");
-  Serial.println("---------------");
-  uploadValue("pass", String(ESP.getEfuseMac()));
-  uploadValue("ip", WiFi.localIP().toString());
+  delay(1000);
+
+  Serial.println("Mounting SD card...");
+  if (!SD_MMC.begin()) {
+    Serial.println("Card Mount Failed");
+    return;
+  }
+
+  uint8_t cardType = SD_MMC.cardType();
+  if (cardType == CARD_NONE) {
+    Serial.println("No SD card attached");
+    return;
+  }
+
+  Serial.print("SD Card Type: ");
+  if (cardType == CARD_MMC) {
+    Serial.println("MMC");
+  } else if (cardType == CARD_SD) {
+    Serial.println("SDSC");
+  } else if (cardType == CARD_SDHC) {
+    Serial.println("SDHC");
+  } else {
+    Serial.println("UNKNOWN");
+  }
+
+  uint64_t cardSize = SD_MMC.cardSize() / (1024 * 1024);
+  Serial.printf("SD Card Size: %lluMB\n", cardSize);
+
+  listDir(SD_MMC, "/", 1);
 }
 
 void loop() {
-
-  mpuModule();
-  stream_handler();
-
-  if (isRecording) {
-    captureFrame();
-  }
 }
