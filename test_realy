@@ -1,252 +1,259 @@
-#include <WiFi.h>
-#include <WiFiClientSecure.h>
-#include <HTTPClient.h>
-#include "esp_camera.h"
+#include <Wire.h>
+#include <DHT.h>
+#include <SoftwareSerial.h>
+#include <Servo.h>
+#include <TinyGPS++.h>
 
-// Replace with your WiFi credentials
-const char* ssid = "Ahmed";
-const char* password = "#1288534459&4274321#ahmed";
-// https://api.telegram.org/bot7653321138:AAFDBqtDK2peK0b-BMNzEea-DfWFs0cmFQI/getUpdates
+#define DHTPIN 2
+#define DHTTYPE DHT22
+DHT dht(DHTPIN, DHTTYPE);
 
-// Supabase Credentials
-const char* supabase_url = "https://xakahklkfirpoanswpep.supabase.co";                                                                                                                                                                                         // Replace with your Supabase URL
-const char* supabase_api_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhha2Foa2xrZmlycG9hbnN3cGVwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTczODU4MTcwNywiZXhwIjoyMDU0MTU3NzA3fQ.prhjteKenS6Io84AZ5eTBnZ8fowFt6SZ2afmFrk6qt4";  // Replace with your API key
-const char* storage_bucket = "firecar";
+#define FIRE_SENSOR_1 A0
+#define FIRE_SENSOR_2 A1
+#define FIRE_SENSOR_3 A2
+#define FIRE_SENSOR_4 A3
+#define FIRE_SENSOR_5 A4
+#define TRIG_PIN 3
+#define ECHO_PIN 4
+#define RELAY_PIN 24
+#define SERVO_PIN 6
+#define MOTOR1_IN1 7
+#define MOTOR1_IN2 8
+#define MOTOR2_IN1 9
+#define MOTOR2_IN2 10
+#define ESP_CAM_TX 26
+#define ESP_CAM_RX 27
 
-long id = 0;  // Bucket name
-// Telegram Bot API details
-const char* botToken = "7653321138:AAFDBqtDK2peK0b-BMNzEea-DfWFs0cmFQI";
-const char* chatId = "6738558948";
-const char* telegramServer = "api.telegram.org";
+SoftwareSerial espCam(ESP_CAM_TX, ESP_CAM_RX);
+Servo myServo;
+String location = "";
+TinyGPSPlus gps;
 
-// Serial communication with Arduino
-#define RX_PIN 16  // Connect to Arduino TX
-#define TX_PIN 17  // Connect to Arduino RX
-#define FLASH_LED_PIN 4
-
-// void startCameraServer();
-WiFiClient client;
-
-// Camera configuration
-#define PWDN_GPIO_NUM 32
-#define RESET_GPIO_NUM -1
-#define XCLK_GPIO_NUM 0
-#define SIOD_GPIO_NUM 26
-#define SIOC_GPIO_NUM 27
-#define Y9_GPIO_NUM 35
-#define Y8_GPIO_NUM 34
-#define Y7_GPIO_NUM 39
-#define Y6_GPIO_NUM 36
-#define Y5_GPIO_NUM 21
-#define Y4_GPIO_NUM 19
-#define Y3_GPIO_NUM 18
-#define Y2_GPIO_NUM 5
-#define VSYNC_GPIO_NUM 25
-#define HREF_GPIO_NUM 23
-#define PCLK_GPIO_NUM 22
+float temperature = 0;
+float humidity = 0;
+String lastLink = "";
+int fireDetected1 = 0;
+int fireDetected2 = 0;
+int fireDetected3 = 0;
+int fireDetected4 = 0;
+int fireDetected5 = 0;
+float distance = 100;
+long duration = 0;
+int triggerValue = 0;
+unsigned long last_log_data = 0;
 
 void setup() {
   Serial.begin(9600);
-  Serial.setRxBufferSize(1024);
+  dht.begin();
+  pinMode(FIRE_SENSOR_1, INPUT);
+  pinMode(FIRE_SENSOR_2, INPUT);
+  pinMode(FIRE_SENSOR_3, INPUT);
+  pinMode(FIRE_SENSOR_4, INPUT);
+  pinMode(FIRE_SENSOR_5, INPUT);
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  pinMode(RELAY_PIN, OUTPUT);
+  pinMode(MOTOR1_IN1, OUTPUT);
+  pinMode(MOTOR1_IN2, OUTPUT);
+  pinMode(MOTOR2_IN1, OUTPUT);
+  pinMode(MOTOR2_IN2, OUTPUT);
 
-  pinMode(FLASH_LED_PIN, OUTPUT);
-  digitalWrite(FLASH_LED_PIN, LOW);  // Ensure it's OFF at startup
+  myServo.attach(SERVO_PIN);
 
-  // Initialize WiFi
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("\nWiFi Connected");
+  Serial1.begin(9600);
+  espCam.begin(9600);
 
-  digitalWrite(FLASH_LED_PIN, HIGH);  // Turn ON flash
-  delay(1000);
-  digitalWrite(FLASH_LED_PIN, LOW);  // Turn off flash
-  delay(1000);
-  digitalWrite(FLASH_LED_PIN, HIGH);  // Turn ON flash
-  delay(1000);
-  digitalWrite(FLASH_LED_PIN, LOW);  // Turn off flash
-
-  setupCamera();
+  digitalWrite(RELAY_PIN, LOW);
+  Serial.println("Code is Starting");
 }
 
 void loop() {
 
+  getGPS();
+
+  if (millis() - last_log_data > 1500) {
+    last_log_data = millis();
+    temperature = dht.readTemperature();
+    humidity = dht.readHumidity();
+
+    fireDetected1 = analogRead(FIRE_SENSOR_1);
+    fireDetected2 = analogRead(FIRE_SENSOR_2);
+    fireDetected3 = analogRead(FIRE_SENSOR_3);
+    fireDetected4 = analogRead(FIRE_SENSOR_4);
+    fireDetected5 = analogRead(FIRE_SENSOR_5);
+
+    distance = getUltrasonicDistance();
+    log_dht();
+    log_fire_sensor();
+    log_distance();
+    Serial.println(location);
+  }
+
+  if (distance < 20) {
+    avoidObstacle();
+  } else {
+    moveForward();
+  }
+
   if (Serial.available()) {
-    String command = Serial.readStringUntil('\n');
-    command.trim();
-    if (command.startsWith("CAPTURE")) {
-      String remainingText = command.substring(7); 
-      id = millis();
-      Serial.print("img_id_to_upload");
-      // Serial.println(id);
-      captureAndUpload();
-      sendTelegramMessage(getMessage(remainingText));
+    String command = Serial.readStringUntil('\n');  // Read input until newline
+    command.trim();                                 // Remove any whitespace or newlines
+
+    if (command == "fire") {
+      fireDetected1 = 600;
     }
   }
-  delay(500);
-}
 
-String getMessage(String part) {
-  return "Fire detected! \n"
-         + part + "\n"
-                  "Photo Link : "
-         + "https://xakahklkfirpoanswpep.supabase.co/storage/v1/object/public/firecar//" + id + ".jpg";
-}
+  triggerValue = 300;
 
-void sendTelegramMessage(String message) {
+  if (fireDetected1 > triggerValue || fireDetected2 > triggerValue || fireDetected3 > triggerValue || fireDetected4 > triggerValue || fireDetected5 > triggerValue) {
+    Serial.println("Fire detected!");
+    stopMotors();
 
-  HTTPClient http;
-  String url = "https://" + String(telegramServer) + "/bot" + String(botToken) + "/sendMessage?chat_id=" + String(chatId) + "&text=" + urlEncode(message);
-  http.begin(url);
-  int httpCode = http.GET();
+    int fireValues[5] = { fireDetected1, fireDetected2, fireDetected3, fireDetected4, fireDetected5 };
+    int maxIndex = 0;
+    int maxValue = fireValues[0];
 
-  if (httpCode > 0) {
-    String response = http.getString();
-    Serial.println("HTTP Response code: " + String(httpCode));
-    Serial.println("Response: " + response);
-  } else {
-    Serial.println("Error on HTTP request: " + String(httpCode));
+    for (int i = 1; i < 5; i++) {
+      if (fireValues[i] > maxValue) {
+        maxValue = fireValues[i];
+        maxIndex = i;
+      }
+    }
+
+    int servo_angles[5] = { 60, 80, 90, 100, 120 };
+    myServo.write(servo_angles[maxIndex]);
+
+    String text = getMessage();
+    Serial.println(text);
+    takePhoto(text);
+
+    activateWaterPump();
+    delay(2000);
+    myServo.write(90);
   }
-
-  http.end();
 }
 
-String urlEncode(String str) {
-  String encodedString = "";
-  char c;
-  char code0;
-  char code1;
-  for (int i = 0; i < str.length(); i++) {
-    c = str.charAt(i);
-    if (c == ' ') {
-      encodedString += "%20";
-    } else if (isalnum(c)) {
-      encodedString += c;
-    } else {
-      code1 = (c & 0xf) + '0';
-      if ((c & 0xf) > 9) code1 = (c & 0xf) - 10 + 'A';
-      c = (c >> 4) & 0xf;
-      code0 = c + '0';
-      if (c > 9) code0 = c - 10 + 'A';
-      encodedString += "%";
-      encodedString += code0;
-      encodedString += code1;
+void log_dht() {
+  Serial.print("temperature : ");
+  Serial.println(temperature);
+  Serial.print("humidity : ");
+  Serial.println(humidity);
+}
+void log_fire_sensor() {
+  Serial.print("fire Sensor : ");
+  Serial.print(fireDetected1);
+  Serial.print(", ");
+  Serial.print(fireDetected2);
+  Serial.print(", ");
+  Serial.print(fireDetected3);
+  Serial.print(", ");
+  Serial.print(fireDetected4);
+  Serial.print(", ");
+  Serial.print(fireDetected5);
+  Serial.println(" ");
+}
+void log_distance() {
+  Serial.print("distance : ");
+  Serial.println(distance);
+}
+String getMessage() {
+  return "Location : "
+         + String(getGPS()) + "\n"
+                              "Temperature : "
+         + String(temperature) + "\n"
+                                 "Humidity : "
+         + String(humidity) + "\n";
+}
+String getGPS() {
+
+  while (Serial1.available() > 0) {
+    gps.encode(Serial1.read());
+    if (gps.location.isUpdated()) {
+      location = "Lat : " + String(gps.location.lat()) + "  " + "Lng : " + String(gps.location.lng());
     }
   }
-  return encodedString;
+
+  return location;
 }
+void takePhoto(String txt) {
 
-// Function to initialize the camera
-void setupCamera() {
-  // Initialize the camera
-  camera_config_t config;
-  config.ledc_channel = LEDC_CHANNEL_0;
-  config.ledc_timer = LEDC_TIMER_0;
-  config.pin_d0 = Y2_GPIO_NUM;
-  config.pin_d1 = Y3_GPIO_NUM;
-  config.pin_d2 = Y4_GPIO_NUM;
-  config.pin_d3 = Y5_GPIO_NUM;
-  config.pin_d4 = Y6_GPIO_NUM;
-  config.pin_d5 = Y7_GPIO_NUM;
-  config.pin_d6 = Y8_GPIO_NUM;
-  config.pin_d7 = Y9_GPIO_NUM;
-  config.pin_xclk = XCLK_GPIO_NUM;
-  config.pin_pclk = PCLK_GPIO_NUM;
-  config.pin_vsync = VSYNC_GPIO_NUM;
-  config.pin_href = HREF_GPIO_NUM;
-  config.pin_sscb_sda = SIOD_GPIO_NUM;
-  config.pin_sscb_scl = SIOC_GPIO_NUM;
-  config.pin_pwdn = PWDN_GPIO_NUM;
-  config.pin_reset = RESET_GPIO_NUM;
-  config.xclk_freq_hz = 20000000;
-  config.pixel_format = PIXFORMAT_JPEG;
+  Serial.println("Capturing Photo...");
+  espCam.flush();
+  espCam.readString();
+  espCam.println("CAPTURE" + txt);
+  delay(1500);
 
-  if (psramFound()) {
-    config.frame_size = FRAMESIZE_UXGA;
-    config.jpeg_quality = 10;
-    config.fb_count = 2;
+  // if (espCam.available()) {
+  //   String response = espCam.readString();
+  //   int index = response.indexOf("img_id_to_upload");
+  //   String newz = response.substring(index + 16);
+  //   Serial.println(newz);
+  //   str_id = newz;
+  // }
+
+  // return str_id;
+}
+void activateWaterPump() {
+  Serial.println("pump is runninig");
+  digitalWrite(RELAY_PIN, HIGH);
+  delay(5000);
+  digitalWrite(RELAY_PIN, LOW);
+}
+void moveForward() {
+  digitalWrite(MOTOR1_IN1, HIGH);
+  digitalWrite(MOTOR1_IN2, LOW);
+  digitalWrite(MOTOR2_IN1, HIGH);
+  digitalWrite(MOTOR2_IN2, LOW);
+}
+void stopMotors() {
+  digitalWrite(MOTOR1_IN1, LOW);
+  digitalWrite(MOTOR1_IN2, LOW);
+  digitalWrite(MOTOR2_IN1, LOW);
+  digitalWrite(MOTOR2_IN2, LOW);
+}
+float getUltrasonicDistance() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(5);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+  pinMode(ECHO_PIN, INPUT);
+  duration = pulseIn(ECHO_PIN, HIGH);
+  return duration * 0.034 / 2;
+}
+void avoidObstacle() {
+  Serial.println("Obstacle detected! Avoiding...");
+  stopMotors();
+  myServo.write(0);
+  delay(4000);
+  float leftDistance = getUltrasonicDistance();
+  myServo.write(180);
+  delay(4000);
+  float rightDistance = getUltrasonicDistance();
+  myServo.write(90);
+
+  if (leftDistance > rightDistance) {
+    turnLeft();
   } else {
-    config.frame_size = FRAMESIZE_SVGA;
-    config.jpeg_quality = 12;
-    config.fb_count = 1;
-  }
-
-  // Camera init
-  esp_err_t err = esp_camera_init(&config);
-  if (err != ESP_OK) {
-    Serial.printf("Camera init failed with error 0x%x", err);
-    return;
+    turnRight();
   }
 }
-
-// Flush camera buffer to clear old frames
-void flushCameraBuffer() {
-  camera_fb_t* fb = NULL;
-  for (int i = 0; i < 5; i++) {  // Capture multiple frames to remove old data
-    fb = esp_camera_fb_get();
-    if (fb) {
-      esp_camera_fb_return(fb);
-    }
-    delay(100);
-  }
+void turnLeft() {
+  Serial.println("Turning Left");
+  digitalWrite(MOTOR1_IN1, LOW);
+  digitalWrite(MOTOR1_IN2, HIGH);
+  digitalWrite(MOTOR2_IN1, HIGH);
+  digitalWrite(MOTOR2_IN2, LOW);
+  delay(3000);
+  moveForward();
 }
-
-void captureAndUpload() {
-  // Capture Image
-  digitalWrite(FLASH_LED_PIN, HIGH);  // Turn ON flash
-  delay(100);                         // Small delay to ensure proper lighting
-  flushCameraBuffer();
-
-  camera_fb_t* fb = esp_camera_fb_get();
-  if (!fb) {
-    Serial.println("Camera capture failed");
-    return;
-  }
-  digitalWrite(FLASH_LED_PIN, LOW);  // Turn OFF flash after capture
-
-  // Upload Image to Supabase
-  String imageName = String(id) + ".jpg";
-  String imageUrl = uploadToSupabase(fb->buf, fb->len, imageName);
-
-  if (imageUrl != "") {
-    // Serial.println("Image Uploaded Successfully!");
-    // Serial.println("Image URL: " + imageUrl);
-  } else {
-    Serial.println("Upload Failed!");
-  }
-
-  // Free Memory
-  esp_camera_fb_return(fb);
-}
-
-String uploadToSupabase(uint8_t* imageData, size_t imageLength, String imageName) {
-  WiFiClientSecure client;
-  HTTPClient http;
-
-  client.setInsecure();  // Ignore SSL certificate
-
-  String url = String(supabase_url) + "/storage/v1/object/" + storage_bucket + "/" + imageName;
-  // Serial.println("Uploading to: " + url);
-
-  http.begin(client, url);
-  http.addHeader("Authorization", "Bearer " + String(supabase_api_key));
-  http.addHeader("Content-Type", "image/jpeg");
-
-  int httpResponseCode = http.PUT(imageData, imageLength);
-  // Serial.print("Response code: ");
-  // Serial.println(httpResponseCode);
-
-  if (httpResponseCode > 0) {
-    // Serial.print("HTTP Response code: ");
-    // Serial.println(httpResponseCode);
-    http.end();
-    return String(supabase_url) + "/storage/v1/object/public/" + storage_bucket + "/" + imageName;
-  } else {
-    // Serial.print("Error on sending POST: ");
-    // Serial.println(http.errorToString(httpResponseCode).c_str());
-    http.end();
-    return "";
-  }
+void turnRight() {
+  Serial.println("Turning Right");
+  digitalWrite(MOTOR1_IN1, HIGH);
+  digitalWrite(MOTOR1_IN2, LOW);
+  digitalWrite(MOTOR2_IN1, LOW);
+  digitalWrite(MOTOR2_IN2, HIGH);
+  delay(3000);
+  moveForward();
 }
