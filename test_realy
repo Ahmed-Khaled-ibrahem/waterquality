@@ -1,102 +1,54 @@
-#include <Wire.h>
-#include <RTClib.h>
 #include <LiquidCrystal_I2C.h>
+#include <DHT.h>
 
-// إنشاء كائنات للأجهزة
-RTC_DS3231 rtc;
+#define DHTPIN 2
+#define DHTTYPE DHT11
+
+DHT dht(DHTPIN, DHTTYPE);
 LiquidCrystal_I2C lcd(0x27, 16, 2);
-
-// تعريف المنافذ
-#define BUZZER 6  // المنفذ المتصل بالمكبر الصوتي
-#define LED 7     // المنفذ المتصل بضوء التنبيه
-#define BUTTON 8  // زر إيقاف التنبيه
-
-// تعريف هيكل بيانات لحفظ الأدوية
-struct Medication {
-  int hour;
-  int minute;
-  const char* name;
-  const char* dose;
-};
-
-// قائمة الأدوية (يمكن تعديلها)
-Medication meds[] = {
-  { 8, 30, "Aspirin", "1 Tablet" },
-  { 14, 0, "Metformin", "2 Tablets" },
-  { 20, 15, "Lisinopril", "1 Tablet" }
-};
-
-const int numMeds = sizeof(meds) / sizeof(meds[0]);  // عدد الأدوية
+const int MQ135_PIN = A0;
 
 void setup() {
-  pinMode(BUZZER, OUTPUT);
-  pinMode(LED, OUTPUT);
-  pinMode(BUTTON, INPUT);
 
-  Serial.begin(9600);
-  Wire.begin();
   lcd.init();
   lcd.backlight();
-
-  if (!rtc.begin()) {
-    Serial.println("RTC CLOCK ERORR");
-    while (1)
-      ;
-  }
-
-  if (rtc.lostPower()) {
-    Serial.println("RTC LOST POWER");
-    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));  // ضبط الوقت الحالي
-  }
-
-  lcd.setCursor(0, 0);
-  lcd.print("Medicine Alert");
-  Serial.println("Medicine Alert");
+  dht.begin();
+  pinMode(MQ135_PIN, INPUT);
+  lcd.print("Air Quality");
   delay(2000);
-  lcd.clear();
 }
 
 void loop() {
-  DateTime now = rtc.now();
 
-  for (int i = 0; i < numMeds; i++) {
-    if (now.hour() == meds[i].hour && now.minute() == meds[i].minute) {
-      triggerAlert(meds[i]);
-    }
-  }
+  float temp = dht.readTemperature();
+  float hum = dht.readHumidity();
+  int air_quality = analogRead(MQ135_PIN);
 
-  delay(1000);  // تحديث كل ثانية
-}
-
-void triggerAlert(Medication med) {
   lcd.clear();
   lcd.setCursor(0, 0);
-  lcd.print("Take: " + String(med.name));
+  lcd.print("Temp: ");
+  lcd.print(temp);
+  lcd.print("C");
   lcd.setCursor(0, 1);
-  lcd.print("Dose: " + String(med.dose));
+  lcd.print("Hum: ");
+  lcd.print(hum);
+  lcd.print("%");
 
-  // تشغيل التنبيه
-  for (int i = 0; i < 5; i++) {
-    digitalWrite(LED, HIGH);
-    tone(BUZZER, 1000);
-    delay(500);
-    digitalWrite(LED, LOW);
-    noTone(BUZZER);
-    delay(500);
-  }
+  delay(2000);
 
-  // انتظار تأكيد المستخدم
-  while (digitalRead(BUTTON) == LOW) {
-    digitalWrite(LED, HIGH);
-    tone(BUZZER, 1000);
-  }
-
-  // إيقاف التنبيه عند الضغط على الزر
-  digitalWrite(LED, LOW);
-  noTone(BUZZER);
   lcd.clear();
   lcd.setCursor(0, 0);
-  lcd.print("Medicine Taken!");
+  lcd.print("Air Quality:");
+  lcd.setCursor(0, 1);
+
+  if (air_quality < 300) {
+    lcd.print("Good");
+  } else if (air_quality < 600) {
+    lcd.print("Moderate");
+  }
+  else {
+    lcd.print("Bad");
+  }
+
   delay(2000);
-  lcd.clear();
 }
