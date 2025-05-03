@@ -1,69 +1,102 @@
-#include "FS.h"
-#include "SD_MMC.h"
+#include <Wire.h>
+#include <RTClib.h>
+#include <LiquidCrystal_I2C.h>
 
-void listDir(fs::FS &fs, const char * dirname, uint8_t levels) {
-  Serial.printf("Listing directory: %s\n", dirname);
+// إنشاء كائنات للأجهزة
+RTC_DS3231 rtc;
+LiquidCrystal_I2C lcd(0x27, 16, 2);
 
-  File root = fs.open(dirname);
-  if (!root) {
-    Serial.println("Failed to open directory");
-    return;
-  }
-  if (!root.isDirectory()) {
-    Serial.println("Not a directory");
-    return;
-  }
+// تعريف المنافذ
+#define BUZZER 6  // المنفذ المتصل بالمكبر الصوتي
+#define LED 7     // المنفذ المتصل بضوء التنبيه
+#define BUTTON 8  // زر إيقاف التنبيه
 
-  File file = root.openNextFile();
-  while (file) {
-    if (file.isDirectory()) {
-      Serial.print("DIR : ");
-      Serial.println(file.name());
-      if (levels) {
-        listDir(fs, file.name(), levels - 1);
-      }
-    } else {
-      Serial.print("FILE: ");
-      Serial.print(file.name());
-      Serial.print("\tSIZE: ");
-      Serial.println(file.size());
-    }
-    file = root.openNextFile();
-  }
-}
+// تعريف هيكل بيانات لحفظ الأدوية
+struct Medication {
+  int hour;
+  int minute;
+  const char* name;
+  const char* dose;
+};
+
+// قائمة الأدوية (يمكن تعديلها)
+Medication meds[] = {
+  { 8, 30, "Aspirin", "1 Tablet" },
+  { 14, 0, "Metformin", "2 Tablets" },
+  { 20, 15, "Lisinopril", "1 Tablet" }
+};
+
+const int numMeds = sizeof(meds) / sizeof(meds[0]);  // عدد الأدوية
 
 void setup() {
-  Serial.begin(115200);
-  delay(1000);
+  pinMode(BUZZER, OUTPUT);
+  pinMode(LED, OUTPUT);
+  pinMode(BUTTON, INPUT);
 
-  Serial.println("Mounting SD card...");
-  if (!SD_MMC.begin()) {
-    Serial.println("Card Mount Failed");
-    return;
+  Serial.begin(9600);
+  Wire.begin();
+  lcd.init();
+  lcd.backlight();
+
+  if (!rtc.begin()) {
+    Serial.println("RTC CLOCK ERORR");
+    while (1)
+      ;
   }
 
-  uint8_t cardType = SD_MMC.cardType();
-  if (cardType == CARD_NONE) {
-    Serial.println("No SD card attached");
-    return;
+  if (rtc.lostPower()) {
+    Serial.println("RTC LOST POWER");
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));  // ضبط الوقت الحالي
   }
 
-  Serial.print("SD Card Type: ");
-  if (cardType == CARD_MMC) {
-    Serial.println("MMC");
-  } else if (cardType == CARD_SD) {
-    Serial.println("SDSC");
-  } else if (cardType == CARD_SDHC) {
-    Serial.println("SDHC");
-  } else {
-    Serial.println("UNKNOWN");
-  }
-
-  uint64_t cardSize = SD_MMC.cardSize() / (1024 * 1024);
-  Serial.printf("SD Card Size: %lluMB\n", cardSize);
-
-  listDir(SD_MMC, "/", 1);
+  lcd.setCursor(0, 0);
+  lcd.print("Medicine Alert");
+  Serial.println("Medicine Alert");
+  delay(2000);
+  lcd.clear();
 }
 
 void loop() {
+  DateTime now = rtc.now();
+
+  for (int i = 0; i < numMeds; i++) {
+    if (now.hour() == meds[i].hour && now.minute() == meds[i].minute) {
+      triggerAlert(meds[i]);
+    }
+  }
+
+  delay(1000);  // تحديث كل ثانية
+}
+
+void triggerAlert(Medication med) {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Take: " + String(med.name));
+  lcd.setCursor(0, 1);
+  lcd.print("Dose: " + String(med.dose));
+
+  // تشغيل التنبيه
+  for (int i = 0; i < 5; i++) {
+    digitalWrite(LED, HIGH);
+    tone(BUZZER, 1000);
+    delay(500);
+    digitalWrite(LED, LOW);
+    noTone(BUZZER);
+    delay(500);
+  }
+
+  // انتظار تأكيد المستخدم
+  while (digitalRead(BUTTON) == LOW) {
+    digitalWrite(LED, HIGH);
+    tone(BUZZER, 1000);
+  }
+
+  // إيقاف التنبيه عند الضغط على الزر
+  digitalWrite(LED, LOW);
+  noTone(BUZZER);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Medicine Taken!");
+  delay(2000);
+  lcd.clear();
 }
