@@ -1,244 +1,314 @@
+#include <Arduino.h>
 #include <WiFi.h>
-#include <ArduinoIoTCloud.h>
-#include <Arduino_ConnectionHandler.h>
-#include <Adafruit_SSD1306.h>
+#include <Firebase_ESP_Client.h>
+#include <Wire.h>
+#include "addons/TokenHelper.h"
+#include "addons/RTDBHelper.h"
+#include <EEPROM.h>
 
-// WiFi credentials
-const char SSID[] = "";  // Replace with your WiFi SSID
-const char PASS[] = "";  // Replace with your WiFi password
+#define EEPROM_SIZE 512  // Define EEPROM size (in bytes)
+#define Buzzer 5
+#define LED 5
 
-// Arduino IoT Cloud Device credentials
-const char DEVICE_ID[] = "";   // Replace with your device ID
-const char SECRET_KEY[] = "";  // Replace with your secret key
+#define WIFI_SSID ""
+#define WIFI_PASSWORD ""
 
-// Variables to be synced with the cloud
-int waterLevelPercentage;
-int lastWaterLevel = 0;
-String waterDistance;
-bool buzzerState;
-bool pumbState;
+#define API_KEY "AIzaSyBnXLeB4TL1STbF2bST-Sey_xfSCTKP7EM"
+#define DATABASE_URL "https://esp-first-base-default-rtdb.firebaseio.com/"
 
-#define SCREEN_WIDTH 128  // OLED display width, in pixels
-#define SCREEN_HEIGHT 32  // OLED display height, in pixels
+#define RFID Serial2  // 17-TX - 16-RX
 
-// Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
-#define OLED_RESET -1  // Reset pin # (or -1 if sharing Arduino reset pin)
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
 
-// Cloud connection handler
-WiFiConnectionHandler ArduinoIoTPreferredConnection(SSID, PASS);
+bool signupOK = false;
 
-// GPIO Pins
-#define TRIGPIN 27
-#define ECHOPIN 26
-#define wifiLed 2
-#define ButtonPin1 12
-#define BuzzerPin 13
-#define GreenLed 14
-#define RELAY_PIN 32
-#define RELAY_BUTTON 33
+String message = "";
+String Data = "";
+unsigned long currentMillis;
+const unsigned long period = 5000;
 
-// Tank distance thresholds (in cm)
-const int emptyTankDistance = 11;
-const int fullTankDistance = 2;
+unsigned long currentUploadMillis;
+unsigned long buzzerMillis;
+const unsigned long Uploadperiod = 10000;
 
-// Trigger percentage for alarm
-const int triggerPer = 15;
+struct KeyValue {
+  String key;
+  String val;
+  unsigned long lastScan;
+  String state;
+  bool isChanged;
+};
 
-float duration;
-float distance;
+struct flag {
+  bool found;
+  int val;
+};
 
-// Variables for button debounce
-unsigned long lastDebounceTime = 0;
-unsigned long debounceDelay = 50;  // 50ms debounce delay
-bool lastButtonState = HIGH;       // Button unpressed state
-bool toggleBuzzer = HIGH;          // Keeps track of buzzer toggle state
+KeyValue cardsData[] = {
+  { "Card 1", "5148484850485051495048484848484848484848484848485356554848504948", millis(), "out", false },
+  { "Card 2", "5148484850485051495048484848484848484848484848485356554949505149", millis(), "out", false },
+  { "Card 3", "5148484850485051495048484848484848484848484848485356555050505350", millis(), "out", false },
+  { "Card 4", "5148484850485051495048484848484848484848484848485356535149544949", millis(), "out", false },
+  { "Card 5", "5148484850485051495048484848484848484848484848485356545756494856", millis(), "out", false },
+  { "Card 6", "5148484869504848484850485253484948505148495452486767685166686970", millis(), "out", false },
+  { "Card 7", "5148484869504848484850485253484948494956495452485353695565685150", millis(), "out", false },
+  { "Card 8", "5148484869504848484850485253484948494950495452485268545267486568", millis(), "out", false },
+  { "Card 9", "5148484869504848484850485253484948495056495452485369575251516850", millis(), "out", false },
+  { "Card 10", "5148484869504848484850485253484948495152495452485455525166565152", millis(), "out", false },
+  { "Card 11", "5148484869505648545757534848484853484952685451495656665070665365", millis(), "out", false },
+};
 
-void initProperties() {
-  // Arduino IoT Cloud setup
-  ArduinoCloud.setBoardId(DEVICE_ID);
-  ArduinoCloud.setSecretDeviceKey(SECRET_KEY);
-  ArduinoCloud.addProperty(waterLevelPercentage, READ, 2 * SECONDS, onWaterLevelPercentageChange);
-  ArduinoCloud.addProperty(waterDistance, READ, 2 * SECONDS, NULL);
-  ArduinoCloud.addProperty(buzzerState, READWRITE, ON_CHANGE, onBuzzerStateChange);
-  ArduinoCloud.addProperty(pumbState, READ, ON_CHANGE, onpumb_change);
-}
-void doThisOnConnect() {
-  /* add your custom code here */
-  Serial.println("Board successfully connected to Arduino IoT Cloud");
-  digitalWrite(wifiLed, HIGH);  //Turn off WiFi LED
-}
-void doThisOnSync() {
-  /* add your custom code here */
-  Serial.println("Thing Properties synchronised");
-}
-void doThisOnDisconnect() {
-  /* add your custom code here */
-  Serial.println("Board disconnected from Arduino IoT Cloud");
-  digitalWrite(wifiLed, LOW);  //Turn off WiFi LED
-}
-void onWaterLevelPercentageChange() {
-  Serial.print("Water Level Changed to: ");
-  Serial.println(waterLevelPercentage);
-}
-void onBuzzerStateChange() {
-  if (!buzzerState) {
-    digitalWrite(BuzzerPin, LOW);
-    toggleBuzzer = LOW;
+int mapSize = sizeof(cardsData) / sizeof(cardsData[0]);
+int capacity = 50;
+int all_in = 0;
+
+void firebaseSetup() {
+
+  config.api_key = API_KEY;
+  config.database_url = DATABASE_URL;
+  config.token_status_callback = tokenStatusCallback;
+
+  String email = "ESP" + String(ESP.getEfuseMac()) + "@gmail.com";
+  String password = String(ESP.getEfuseMac());
+
+  auth.user.email = email.c_str();
+  auth.user.password = password.c_str();
+
+  Serial.println("trying to login as ");
+  Serial.print("Email : ");
+  Serial.println(email);
+  Serial.print("Password : ");
+  Serial.println(password);
+
+  Firebase.begin(&config, &auth);
+
+  if (auth.token.uid.length() > 0) {
+    Serial.println("Login Successful!");
+    Serial.println("User UID: " + String(auth.token.uid.c_str()));
+    signupOK = true;
+  } else {
+    Serial.println("Login Failed. Trying to Sign Up...");
   }
-}
-void onpumb_change() {
+
+  Firebase.reconnectWiFi(true);
 }
 
 void setup() {
-  // Initialize Serial
-  Serial.begin(115200);
 
-  // Pin configurations
-  pinMode(TRIGPIN, OUTPUT);
-  pinMode(ECHOPIN, INPUT);
-  pinMode(wifiLed, OUTPUT);
-  pinMode(GreenLed, OUTPUT);
-  pinMode(BuzzerPin, OUTPUT);
-  pinMode(ButtonPin1, INPUT_PULLUP);
-  pinMode(RELAY_PIN, OUTPUT);
-  pinMode(RELAY_BUTTON, INPUT);
+  pinMode(Buzzer, OUTPUT);
+  pinMode(LED, OUTPUT);
+  Serial.begin(9600);
+  digitalWrite(Buzzer, LOW);
+  digitalWrite(LED, LOW);
+  EEPROM.begin(EEPROM_SIZE);  // Initialize EEPROM
 
-  digitalWrite(wifiLed, LOW);
-  digitalWrite(GreenLed, LOW);
-  digitalWrite(BuzzerPin, LOW);
-  digitalWrite(RELAY_PIN, LOW);
-  pumbState = false;
-
-  // OLED Display initialization
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println(F("SSD1306 allocation failed"));
-    for (;;)
-      ;
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print("Connecting to Wi-Fi");
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    delay(300);
   }
-  delay(1000);
-  display.setTextSize(1);
-  display.setTextColor(WHITE);
-  display.clearDisplay();
+  Serial.println();
+  Serial.print("Connected with IP: ");
+  Serial.println(WiFi.localIP());
+  Serial.println();
 
-  initProperties();
+  delay(3000);
 
-  ArduinoCloud.begin(ArduinoIoTPreferredConnection);
+  firebaseSetup();
 
-  ArduinoCloud.addCallback(ArduinoIoTCloudEvent::CONNECT, doThisOnConnect);
-  ArduinoCloud.addCallback(ArduinoIoTCloudEvent::SYNC, doThisOnSync);
-  ArduinoCloud.addCallback(ArduinoIoTCloudEvent::DISCONNECT, doThisOnDisconnect);
+  RFID.begin(38400, SERIAL_8N1, 16, 17);  // UART2 setup (baud, mode, RX, TX)
+  delay(200);
+
+  intiDatasetFromEprom();
+
+  message = String("\nN1,14\r");  // set power
+  RFID.print(message);
+  delay(200);
+  readRFID();
+
+  message = String("\nN0,00\r");  // read power
+  RFID.print(message);
+  delay(200);
+  readRFID();
+
+  message = String("\nU\r");  // read multi
+  RFID.print(message);
+  delay(200);
+  readRFID();
+
+  // upload_cards_dataset();
+  readIntFromFirebase("/rfid/" + String(ESP.getEfuseMac()) + "/capacity");
+  Serial.println(String(ESP.getEfuseMac()));
 }
+
 
 void loop() {
-  ArduinoCloud.update();
-  measureWaterLevel();
-  handleBuzzerButton();
-  handleRelayButton();
+
+  digitalWrite(Buzzer, LOW);
+  message = String("\nU\r");  // read EPC
+  RFID.print(message);
+  delay(50);
+  readRFID();
+  handling_buzzer();
+  check_capacity();
+
+  if (millis() - currentUploadMillis >= Uploadperiod) {
+    check_if_needs_upload();
+    currentUploadMillis = millis();
+  }
 }
 
-void togleRelay() {
-  pumbState = !pumbState;
-  digitalWrite(RELAY_PIN, pumbState);
-}
-
-void measureWaterLevel() {
-  // Trigger the ultrasonic sensor
-  digitalWrite(TRIGPIN, LOW);
-  delayMicroseconds(5);
-  digitalWrite(TRIGPIN, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(TRIGPIN, LOW);
-
-  // Measure the duration of the echo pulse
-  duration = pulseIn(ECHOPIN, HIGH);
-  distance = ((duration / 2) * 0.343) / 10;
-
-  if (distance > fullTankDistance && distance < emptyTankDistance) {
-    // Calculate water level percentage
-    waterLevelPercentage = map((int)distance, emptyTankDistance, fullTankDistance, 0, 100);
-    waterDistance = String(distance) + " cm";
-
-    if (waterLevelPercentage < triggerPer) {
-      display.clearDisplay();
-      display.setTextSize(2);
-      display.setCursor(0, 0);
-      display.println("Alert");
-      display.setTextSize(1);
-      display.print("water less than trigger value");
-      display.display();
-
-    } else if (waterLevelPercentage < lastWaterLevel && !pumbState) {
-      display.clearDisplay();
-      display.setTextSize(2);
-      display.setCursor(0, 0);
-      display.println("Alert");
-      display.setTextSize(1);
-      display.print("Water Leak!!!");
-      display.display();
-    } else {
-      // Update OLED display
-      display.clearDisplay();
-      display.setTextSize(4);
-      display.setCursor(8, 2);
-      display.print(waterLevelPercentage);
-      display.print(" %");
-      display.display();
-    }
-    lastWaterLevel = waterLevelPercentage;
-
-    // Manage LED and buzzer
-    if (waterLevelPercentage < triggerPer) {
-      digitalWrite(GreenLed, HIGH);
-      if (toggleBuzzer == HIGH) {
-        digitalWrite(BuzzerPin, HIGH);
-        buzzerState = true;
+void readIntFromFirebase(String path) {
+  if (Firebase.ready()) {
+    // Read integer from Firebase at path "/test/int"
+    if (Firebase.RTDB.getInt(&fbdo, path)) {
+      Serial.println(fbdo.dataType());
+      // Serial.println(fbdo.dataType());
+      if (fbdo.dataType() == "int") {
+        capacity = fbdo.intData();
+        return;
+      } else {
+        Serial.println("Data type is not integer");
       }
     } else {
-      digitalWrite(GreenLed, LOW);
-      if (toggleBuzzer == HIGH) {
-        digitalWrite(BuzzerPin, HIGH);
-      }
-    }
-
-    if (distance > fullTankDistance && waterLevelPercentage > triggerPer) {
-      toggleBuzzer = HIGH;
-      digitalWrite(BuzzerPin, LOW);
-      buzzerState = false;
+      Serial.print("Failed to read data: ");
+      Serial.println(fbdo.errorReason());
     }
   } else {
-    // Update OLED display
-    display.clearDisplay();
-    display.setTextSize(4);
-    display.setCursor(8, 2);
-    display.print("--");
-    display.print(" %");
-    display.display();
+    Serial.println("Firebase not ready");
   }
 }
 
-void handleRelayButton() {
-  if (digitalRead(RELAY_BUTTON) == HIGH) {
-    while (digitalRead(RELAY_BUTTON) == HIGH) { delay(10); }
-    togleRelay();
+void check_capacity() {
+  if (all_in >= capacity) {
+    digitalWrite(LED, HIGH);
+  }
+  else {
+    digitalWrite(LED, LOW);
   }
 }
 
-void handleBuzzerButton() {
-  bool currentButtonState = digitalRead(ButtonPin1);
+void intiDatasetFromEprom() {
 
-  if (currentButtonState != lastButtonState) {
-    lastDebounceTime = millis();  // Reset debounce timer
+  for (int i = 0; i < mapSize; i++) {
+    int res = readFromEEPROM(i);
+    if (res == 1) {
+      cardsData[i].state = "in";
+    } else {
+      cardsData[i].state = "out";
+    }
   }
+}
 
-  if ((millis() - lastDebounceTime) > debounceDelay) {
-    if (currentButtonState == LOW && toggleBuzzer == HIGH) {  // Button pressed
-      digitalWrite(BuzzerPin, LOW);
-      toggleBuzzer = LOW;
-      buzzerState = false;
-      ArduinoCloud.update();
+void turn_buzzer() {
+  buzzerMillis = millis();
+}
+
+void handling_buzzer() {
+
+  if (millis() - buzzerMillis > 1000) {
+    digitalWrite(Buzzer, LOW);
+  } else {
+    digitalWrite(Buzzer, HIGH);
+  }
+}
+
+void writeToEEPROM(int address, int value) {
+  EEPROM.write(address, value);  // Store a single byte
+  EEPROM.commit();               // Save changes to flash memory
+}
+
+int readFromEEPROM(int address) {
+  int value = EEPROM.read(address);
+  return value;
+}
+
+void check_if_needs_upload() {
+  int temp_counter = 0;
+
+  for (int i = 0; i < mapSize; i++) {
+
+    if (cardsData[i].state == "in") {
+      temp_counter++;
+    }
+
+    if (cardsData[i].isChanged) {
+      cardsData[i].isChanged = false;
+      upload("rfid/" + String(ESP.getEfuseMac()) + "/cards/" + cardsData[i].val, cardsData[i].state);
     }
   }
 
-  lastButtonState = currentButtonState;  // Update the button state
+  all_in = temp_counter;
+}
+
+void upload(String _path, String _value) {
+  if (Firebase.ready() && signupOK) {
+    if (Firebase.RTDB.setString(&fbdo, _path, _value)) {
+      Serial.println("Uploaded");
+    } else {
+      Serial.println("FAILED");
+      Serial.println("REASON: " + fbdo.errorReason());
+    }
+  }
+}
+
+void readRFID() {
+  while (RFID.available()) {
+    byte incomingByte = RFID.read();
+    if (incomingByte == 13 || incomingByte == 10 || incomingByte == 85 || incomingByte == 88) {  // 82
+      continue;
+    }
+    Data.concat(incomingByte);
+    if (Data.length() >= 64) {
+      output();
+    }
+  }
+  if (Data.length() > 1) {
+    output();
+  }
+}
+
+void output() {
+  // Serial.println(Data);
+  CardSearch(Data);
+  turn_buzzer();
+  Data = "";
+}
+
+void CardSearch(String targetValue) {
+
+  flag foundKey = findKeyByValue(targetValue);
+
+  if (foundKey.found) {
+    if (millis() - cardsData[foundKey.val].lastScan > period) {
+      Serial.print("Detected : ");
+      Serial.println(cardsData[foundKey.val].key);
+      cardsData[foundKey.val].lastScan = millis();
+
+      if (cardsData[foundKey.val].state == "out") {
+        cardsData[foundKey.val].state = "in";
+        writeToEEPROM(foundKey.val, 1);
+      } else {
+        cardsData[foundKey.val].state = "out";
+        writeToEEPROM(foundKey.val, 0);
+      }
+
+      cardsData[foundKey.val].isChanged = true;
+    }
+  } else {
+    //    Serial.println("Value not found!");
+  }
+}
+
+flag findKeyByValue(String _value) {
+  for (int i = 0; i < mapSize; i++) {
+    if (cardsData[i].val == _value) {
+      digitalWrite(Buzzer, HIGH);
+      return { true, i };
+    }
+  }
+  return { false, 0 };
 }
