@@ -1,314 +1,622 @@
-#include <Arduino.h>
-#include <WiFi.h>
-#include <Firebase_ESP_Client.h>
+// ============================================================================
+// LIBRARIES
+// ============================================================================
 #include <Wire.h>
-#include "addons/TokenHelper.h"
-#include "addons/RTDBHelper.h"
-#include <EEPROM.h>
+#include <LiquidCrystal_I2C.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
 
-#define EEPROM_SIZE 512  // Define EEPROM size (in bytes)
-#define Buzzer 5
-#define LED 5
+// ============================================================================
+// PIN DEFINITIONS
+// ============================================================================
+// Temperature Sensor (DS18B20)
+#define TEMP_SENSOR_PIN     2
 
-#define WIFI_SSID ""
-#define WIFI_PASSWORD ""
+// Gas Sensor (MQ-7)
+#define MQ7_ANALOG_PIN      A0
+#define MQ7_DIGITAL_PIN     3
 
-#define API_KEY "AIzaSyBnXLeB4TL1STbF2bST-Sey_xfSCTKP7EM"
-#define DATABASE_URL "https://esp-first-base-default-rtdb.firebaseio.com/"
+// Flame Sensor
+#define FLAME_SENSOR_PIN    4
 
-#define RFID Serial2  // 17-TX - 16-RX
+// Oil Leak Detection
+#define RAINDROP_ANALOG_PIN A1
+#define RAINDROP_DIGITAL_PIN 5
+#define TOUCH_SENSOR_PIN    6
 
-FirebaseData fbdo;
-FirebaseAuth auth;
-FirebaseConfig config;
+// Alert Outputs
+#define BUZZER_PIN          7
+#define RGB_RED_PIN         8
+#define RGB_GREEN_PIN       9
+#define RGB_BLUE_PIN        10
 
-bool signupOK = false;
+// ============================================================================
+// CONSTANTS & THRESHOLDS
+// ============================================================================
+// Temperature Thresholds (Celsius)
+#define TEMP_WARNING        80.0    // Warning temperature
+#define TEMP_CRITICAL       95.0    // Critical temperature
+#define TEMP_NORMAL         70.0    // Normal operating temperature
 
-String message = "";
-String Data = "";
-unsigned long currentMillis;
-const unsigned long period = 5000;
+// Gas Sensor Thresholds
+#define GAS_WARNING         300     // Warning level (analog value)
+#define GAS_CRITICAL        500     // Critical level (analog value)
 
-unsigned long currentUploadMillis;
-unsigned long buzzerMillis;
-const unsigned long Uploadperiod = 10000;
+// Raindrop Sensor Thresholds (lower = more liquid detected)
+#define OIL_LEAK_THRESHOLD  500     // Threshold for oil leak detection
 
-struct KeyValue {
-  String key;
-  String val;
-  unsigned long lastScan;
-  String state;
-  bool isChanged;
+// Timing Constants
+#define SENSOR_READ_INTERVAL 1000   // Read sensors every 1 second
+#define LCD_UPDATE_INTERVAL  500    // Update LCD every 500ms
+#define BUZZER_BEEP_DURATION 200    // Buzzer beep duration in ms
+#define DEBOUNCE_DELAY       50     // Debounce delay for digital sensors
+
+// LCD Configuration
+#define LCD_ADDRESS         0x27    // Common I2C address (try 0x3F if not working)
+#define LCD_COLS            16
+#define LCD_ROWS            2
+
+// ============================================================================
+// SENSOR OBJECTS
+// ============================================================================
+// LCD Display
+LiquidCrystal_I2C lcd(LCD_ADDRESS, LCD_COLS, LCD_ROWS);
+
+// Temperature Sensor
+OneWire oneWire(TEMP_SENSOR_PIN);
+DallasTemperature tempSensor(&oneWire);
+
+// ============================================================================
+// GLOBAL VARIABLES
+// ============================================================================
+// Sensor readings
+float motorTemperature = 0.0;
+int gasLevel = 0;
+bool gasDetected = false;
+bool flameDetected = false;
+int oilLeakLevel = 0;
+bool oilLeakDetected = false;
+bool touchDetected = false;
+
+// System state
+enum SystemState {
+  STATE_NORMAL,
+  STATE_WARNING,
+  STATE_CRITICAL
 };
+SystemState currentState = STATE_NORMAL;
 
-struct flag {
-  bool found;
-  int val;
-};
+// Timing variables
+unsigned long lastSensorRead = 0;
+unsigned long lastLCDUpdate = 0;
+unsigned long lastBuzzerBeep = 0;
 
-KeyValue cardsData[] = {
-  { "Card 1", "5148484850485051495048484848484848484848484848485356554848504948", millis(), "out", false },
-  { "Card 2", "5148484850485051495048484848484848484848484848485356554949505149", millis(), "out", false },
-  { "Card 3", "5148484850485051495048484848484848484848484848485356555050505350", millis(), "out", false },
-  { "Card 4", "5148484850485051495048484848484848484848484848485356535149544949", millis(), "out", false },
-  { "Card 5", "5148484850485051495048484848484848484848484848485356545756494856", millis(), "out", false },
-  { "Card 6", "5148484869504848484850485253484948505148495452486767685166686970", millis(), "out", false },
-  { "Card 7", "5148484869504848484850485253484948494956495452485353695565685150", millis(), "out", false },
-  { "Card 8", "5148484869504848484850485253484948494950495452485268545267486568", millis(), "out", false },
-  { "Card 9", "5148484869504848484850485253484948495056495452485369575251516850", millis(), "out", false },
-  { "Card 10", "5148484869504848484850485253484948495152495452485455525166565152", millis(), "out", false },
-  { "Card 11", "5148484869505648545757534848484853484952685451495656665070665365", millis(), "out", false },
-};
+// Alert flags
+bool temperatureAlert = false;
+bool gasAlert = false;
+bool flameAlert = false;
+bool oilLeakAlert = false;
 
-int mapSize = sizeof(cardsData) / sizeof(cardsData[0]);
-int capacity = 50;
-int all_in = 0;
+// Debug mode
+bool debugMode = true;
 
-void firebaseSetup() {
-
-  config.api_key = API_KEY;
-  config.database_url = DATABASE_URL;
-  config.token_status_callback = tokenStatusCallback;
-
-  String email = "ESP" + String(ESP.getEfuseMac()) + "@gmail.com";
-  String password = String(ESP.getEfuseMac());
-
-  auth.user.email = email.c_str();
-  auth.user.password = password.c_str();
-
-  Serial.println("trying to login as ");
-  Serial.print("Email : ");
-  Serial.println(email);
-  Serial.print("Password : ");
-  Serial.println(password);
-
-  Firebase.begin(&config, &auth);
-
-  if (auth.token.uid.length() > 0) {
-    Serial.println("Login Successful!");
-    Serial.println("User UID: " + String(auth.token.uid.c_str()));
-    signupOK = true;
-  } else {
-    Serial.println("Login Failed. Trying to Sign Up...");
-  }
-
-  Firebase.reconnectWiFi(true);
-}
-
+// ============================================================================
+// SETUP FUNCTION
+// ============================================================================
 void setup() {
-
-  pinMode(Buzzer, OUTPUT);
-  pinMode(LED, OUTPUT);
+  // Initialize Serial Communication
   Serial.begin(9600);
-  digitalWrite(Buzzer, LOW);
-  digitalWrite(LED, LOW);
-  EEPROM.begin(EEPROM_SIZE);  // Initialize EEPROM
-
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  Serial.print("Connecting to Wi-Fi");
-  while (WiFi.status() != WL_CONNECTED) {
-    Serial.print(".");
-    delay(300);
-  }
-  Serial.println();
-  Serial.print("Connected with IP: ");
-  Serial.println(WiFi.localIP());
-  Serial.println();
-
-  delay(3000);
-
-  firebaseSetup();
-
-  RFID.begin(38400, SERIAL_8N1, 16, 17);  // UART2 setup (baud, mode, RX, TX)
-  delay(200);
-
-  intiDatasetFromEprom();
-
-  message = String("\nN1,14\r");  // set power
-  RFID.print(message);
-  delay(200);
-  readRFID();
-
-  message = String("\nN0,00\r");  // read power
-  RFID.print(message);
-  delay(200);
-  readRFID();
-
-  message = String("\nU\r");  // read multi
-  RFID.print(message);
-  delay(200);
-  readRFID();
-
-  // upload_cards_dataset();
-  readIntFromFirebase("/rfid/" + String(ESP.getEfuseMac()) + "/capacity");
-  Serial.println(String(ESP.getEfuseMac()));
+  Serial.println(F("========================================"));
+  Serial.println(F("  CAR MONITORING SYSTEM - STARTING"));
+  Serial.println(F("========================================"));
+  
+  // Initialize Pin Modes
+  initializePins();
+  
+  // Initialize LCD
+  initializeLCD();
+  
+  // Initialize Temperature Sensor
+  initializeTemperatureSensor();
+  
+  // Startup indication
+  startupSequence();
+  
+  Serial.println(F("System initialized successfully!"));
+  Serial.println(F("========================================\n"));
+  
+  delay(2000);
 }
 
-
+// ============================================================================
+// MAIN LOOP
+// ============================================================================
 void loop() {
-
-  digitalWrite(Buzzer, LOW);
-  message = String("\nU\r");  // read EPC
-  RFID.print(message);
-  delay(50);
-  readRFID();
-  handling_buzzer();
-  check_capacity();
-
-  if (millis() - currentUploadMillis >= Uploadperiod) {
-    check_if_needs_upload();
-    currentUploadMillis = millis();
+  unsigned long currentMillis = millis();
+  
+  // Read all sensors at regular intervals
+  if (currentMillis - lastSensorRead >= SENSOR_READ_INTERVAL) {
+    lastSensorRead = currentMillis;
+    
+    readAllSensors();
+    evaluateSystemState();
+    printDebugInfo();
   }
+  
+  // Update LCD display
+  if (currentMillis - lastLCDUpdate >= LCD_UPDATE_INTERVAL) {
+    lastLCDUpdate = currentMillis;
+    updateLCDDisplay();
+  }
+  
+  // Handle alerts
+  handleAlerts();
+  
+  // Update RGB LED status
+  updateRGBStatus();
 }
 
-void readIntFromFirebase(String path) {
-  if (Firebase.ready()) {
-    // Read integer from Firebase at path "/test/int"
-    if (Firebase.RTDB.getInt(&fbdo, path)) {
-      Serial.println(fbdo.dataType());
-      // Serial.println(fbdo.dataType());
-      if (fbdo.dataType() == "int") {
-        capacity = fbdo.intData();
-        return;
-      } else {
-        Serial.println("Data type is not integer");
-      }
-    } else {
-      Serial.print("Failed to read data: ");
-      Serial.println(fbdo.errorReason());
-    }
+// ============================================================================
+// INITIALIZATION FUNCTIONS
+// ============================================================================
+
+void initializePins() {
+  Serial.println(F("Initializing pins..."));
+  
+  // Input pins
+  pinMode(MQ7_DIGITAL_PIN, INPUT);
+  pinMode(FLAME_SENSOR_PIN, INPUT);
+  pinMode(RAINDROP_DIGITAL_PIN, INPUT);
+  pinMode(TOUCH_SENSOR_PIN, INPUT);
+  
+  // Output pins
+  pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(RGB_RED_PIN, OUTPUT);
+  pinMode(RGB_GREEN_PIN, OUTPUT);
+  pinMode(RGB_BLUE_PIN, OUTPUT);
+  
+  // Set initial states
+  digitalWrite(BUZZER_PIN, LOW);
+  setRGBColor(0, 0, 0);  // LED off
+  
+  Serial.println(F("Pins initialized."));
+}
+
+void initializeLCD() {
+  Serial.println(F("Initializing LCD..."));
+  
+  lcd.init();
+  lcd.backlight();
+  lcd.clear();
+  
+  // Display startup message
+  lcd.setCursor(0, 0);
+  lcd.print(F("Car Monitor"));
+  lcd.setCursor(0, 1);
+  lcd.print(F("Initializing..."));
+  
+  Serial.println(F("LCD initialized."));
+}
+
+void initializeTemperatureSensor() {
+  Serial.println(F("Initializing DS18B20 temperature sensor..."));
+  
+  tempSensor.begin();
+  
+  // Check if sensor is connected
+  if (tempSensor.getDeviceCount() == 0) {
+    Serial.println(F("WARNING: No DS18B20 sensor found!"));
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print(F("TEMP SENSOR"));
+    lcd.setCursor(0, 1);
+    lcd.print(F("NOT FOUND!"));
+    delay(2000);
   } else {
-    Serial.println("Firebase not ready");
+    Serial.print(F("DS18B20 sensors found: "));
+    Serial.println(tempSensor.getDeviceCount());
   }
 }
 
-void check_capacity() {
-  if (all_in >= capacity) {
-    digitalWrite(LED, HIGH);
+void startupSequence() {
+  Serial.println(F("Running startup sequence..."));
+  
+  // Test RGB LED
+  setRGBColor(255, 0, 0);    // Red
+  delay(300);
+  setRGBColor(0, 255, 0);    // Green
+  delay(300);
+  setRGBColor(0, 0, 255);    // Blue
+  delay(300);
+  setRGBColor(0, 0, 0);      // Off
+  
+  // Test buzzer
+  tone(BUZZER_PIN, 1000, 200);
+  delay(300);
+  tone(BUZZER_PIN, 1500, 200);
+  delay(500);
+  
+  Serial.println(F("Startup sequence complete."));
+}
+
+// ============================================================================
+// SENSOR READING FUNCTIONS
+// ============================================================================
+
+void readAllSensors() {
+  readTemperatureSensor();
+  readGasSensor();
+  readFlameSensor();
+  readOilLeakSensors();
+}
+
+void readTemperatureSensor() {
+  tempSensor.requestTemperatures();
+  motorTemperature = tempSensor.getTempCByIndex(0);
+  
+  // Check for sensor error
+  if (motorTemperature == DEVICE_DISCONNECTED_C || motorTemperature < -50) {
+    Serial.println(F("ERROR: Temperature sensor disconnected or error"));
+    motorTemperature = -999;  // Error indicator
   }
+  
+  // Evaluate temperature alerts
+  if (motorTemperature >= TEMP_CRITICAL) {
+    temperatureAlert = true;
+  } else if (motorTemperature >= TEMP_WARNING) {
+    temperatureAlert = true;
+  } else {
+    temperatureAlert = false;
+  }
+}
+
+void readGasSensor() {
+  // Read analog value (0-1023)
+  gasLevel = analogRead(MQ7_ANALOG_PIN);
+  
+  // Read digital pin (some MQ-7 modules have digital output)
+  gasDetected = digitalRead(MQ7_DIGITAL_PIN) == HIGH;
+  
+  // Evaluate gas alerts
+  if (gasLevel >= GAS_CRITICAL || gasDetected) {
+    gasAlert = true;
+  } else if (gasLevel >= GAS_WARNING) {
+    gasAlert = true;
+  } else {
+    gasAlert = false;
+  }
+}
+
+void readFlameSensor() {
+  // Flame sensor typically outputs LOW when flame detected
+  flameDetected = digitalRead(FLAME_SENSOR_PIN) == LOW;
+  flameAlert = flameDetected;
+}
+
+void readOilLeakSensors() {
+  // Read raindrop sensor (analog)
+  oilLeakLevel = analogRead(RAINDROP_ANALOG_PIN);
+  
+  // Read raindrop digital pin
+  bool raindropDetected = digitalRead(RAINDROP_DIGITAL_PIN) == LOW;
+  
+  // Read touch sensor
+  touchDetected = digitalRead(TOUCH_SENSOR_PIN) == HIGH;
+  
+  // Oil leak detected if either sensor triggers
+  oilLeakDetected = (oilLeakLevel < OIL_LEAK_THRESHOLD) || raindropDetected || touchDetected;
+  oilLeakAlert = oilLeakDetected;
+}
+
+// ============================================================================
+// SYSTEM STATE EVALUATION
+// ============================================================================
+
+void evaluateSystemState() {
+  // Determine overall system state based on all alerts
+  if (flameAlert || 
+      (motorTemperature >= TEMP_CRITICAL) || 
+      (gasLevel >= GAS_CRITICAL)) {
+    currentState = STATE_CRITICAL;
+  } 
+  else if (temperatureAlert || gasAlert || oilLeakAlert) {
+    currentState = STATE_WARNING;
+  } 
   else {
-    digitalWrite(LED, LOW);
+    currentState = STATE_NORMAL;
   }
 }
 
-void intiDatasetFromEprom() {
+// ============================================================================
+// DISPLAY FUNCTIONS
+// ============================================================================
 
-  for (int i = 0; i < mapSize; i++) {
-    int res = readFromEEPROM(i);
-    if (res == 1) {
-      cardsData[i].state = "in";
-    } else {
-      cardsData[i].state = "out";
-    }
+void updateLCDDisplay() {
+  lcd.clear();
+  
+  switch (currentState) {
+    case STATE_CRITICAL:
+      displayCriticalAlert();
+      break;
+      
+    case STATE_WARNING:
+      displayWarningAlert();
+      break;
+      
+    case STATE_NORMAL:
+      displayNormalStatus();
+      break;
   }
 }
 
-void turn_buzzer() {
-  buzzerMillis = millis();
+void displayCriticalAlert() {
+  lcd.setCursor(0, 0);
+  lcd.print(F("!!! CRITICAL !!!"));
+  lcd.setCursor(0, 1);
+  
+  if (flameAlert) {
+    lcd.print(F("FIRE DETECTED!"));
+  } 
+  else if (motorTemperature >= TEMP_CRITICAL) {
+    lcd.print(F("TEMP: "));
+    lcd.print(motorTemperature, 1);
+    lcd.print(F("C"));
+  } 
+  else if (gasLevel >= GAS_CRITICAL) {
+    lcd.print(F("GAS LEAK!"));
+  }
 }
 
-void handling_buzzer() {
+void displayWarningAlert() {
+  lcd.setCursor(0, 0);
+  lcd.print(F("** WARNING **"));
+  lcd.setCursor(0, 1);
+  
+  if (temperatureAlert) {
+    lcd.print(F("Temp: "));
+    lcd.print(motorTemperature, 1);
+    lcd.print(F("C"));
+  } 
+  else if (gasAlert) {
+    lcd.print(F("Gas: "));
+    lcd.print(gasLevel);
+  } 
+  else if (oilLeakAlert) {
+    lcd.print(F("Oil Leak!"));
+  }
+}
 
-  if (millis() - buzzerMillis > 1000) {
-    digitalWrite(Buzzer, LOW);
+void displayNormalStatus() {
+  // First row: Temperature
+  lcd.setCursor(0, 0);
+  lcd.print(F("Temp:"));
+  if (motorTemperature > -50) {
+    lcd.print(motorTemperature, 1);
+    lcd.print(F("C"));
   } else {
-    digitalWrite(Buzzer, HIGH);
+    lcd.print(F("ERR"));
+  }
+  
+  // Add status indicator
+  lcd.setCursor(14, 0);
+  lcd.print(F("OK"));
+  
+  // Second row: Gas level
+  lcd.setCursor(0, 1);
+  lcd.print(F("Gas:"));
+  lcd.print(gasLevel);
+  
+  // Add other status
+  lcd.setCursor(10, 1);
+  if (oilLeakDetected) {
+    lcd.print(F("OIL!"));
+  } else {
+    lcd.print(F("    "));
   }
 }
 
-void writeToEEPROM(int address, int value) {
-  EEPROM.write(address, value);  // Store a single byte
-  EEPROM.commit();               // Save changes to flash memory
-}
+// ============================================================================
+// ALERT HANDLING FUNCTIONS
+// ============================================================================
 
-int readFromEEPROM(int address) {
-  int value = EEPROM.read(address);
-  return value;
-}
-
-void check_if_needs_upload() {
-  int temp_counter = 0;
-
-  for (int i = 0; i < mapSize; i++) {
-
-    if (cardsData[i].state == "in") {
-      temp_counter++;
-    }
-
-    if (cardsData[i].isChanged) {
-      cardsData[i].isChanged = false;
-      upload("rfid/" + String(ESP.getEfuseMac()) + "/cards/" + cardsData[i].val, cardsData[i].state);
-    }
-  }
-
-  all_in = temp_counter;
-}
-
-void upload(String _path, String _value) {
-  if (Firebase.ready() && signupOK) {
-    if (Firebase.RTDB.setString(&fbdo, _path, _value)) {
-      Serial.println("Uploaded");
-    } else {
-      Serial.println("FAILED");
-      Serial.println("REASON: " + fbdo.errorReason());
-    }
+void handleAlerts() {
+  switch (currentState) {
+    case STATE_CRITICAL:
+      handleCriticalAlert();
+      break;
+      
+    case STATE_WARNING:
+      handleWarningAlert();
+      break;
+      
+    case STATE_NORMAL:
+      // No alerts needed
+      noTone(BUZZER_PIN);
+      break;
   }
 }
 
-void readRFID() {
-  while (RFID.available()) {
-    byte incomingByte = RFID.read();
-    if (incomingByte == 13 || incomingByte == 10 || incomingByte == 85 || incomingByte == 88) {  // 82
-      continue;
-    }
-    Data.concat(incomingByte);
-    if (Data.length() >= 64) {
-      output();
-    }
-  }
-  if (Data.length() > 1) {
-    output();
+void handleCriticalAlert() {
+  // Continuous fast beeping for critical alerts
+  unsigned long currentMillis = millis();
+  
+  if (currentMillis - lastBuzzerBeep >= 300) {
+    tone(BUZZER_PIN, 2000, 200);
+    lastBuzzerBeep = currentMillis;
   }
 }
 
-void output() {
-  // Serial.println(Data);
-  CardSearch(Data);
-  turn_buzzer();
-  Data = "";
+void handleWarningAlert() {
+  // Intermittent beeping for warnings
+  unsigned long currentMillis = millis();
+  
+  if (currentMillis - lastBuzzerBeep >= 1000) {
+    tone(BUZZER_PIN, 1500, 300);
+    lastBuzzerBeep = currentMillis;
+  }
 }
 
-void CardSearch(String targetValue) {
+// ============================================================================
+// RGB LED FUNCTIONS
+// ============================================================================
 
-  flag foundKey = findKeyByValue(targetValue);
-
-  if (foundKey.found) {
-    if (millis() - cardsData[foundKey.val].lastScan > period) {
-      Serial.print("Detected : ");
-      Serial.println(cardsData[foundKey.val].key);
-      cardsData[foundKey.val].lastScan = millis();
-
-      if (cardsData[foundKey.val].state == "out") {
-        cardsData[foundKey.val].state = "in";
-        writeToEEPROM(foundKey.val, 1);
+void updateRGBStatus() {
+  switch (currentState) {
+    case STATE_CRITICAL:
+      // Blinking red for critical
+      if (millis() % 500 < 250) {
+        setRGBColor(255, 0, 0);  // Red
       } else {
-        cardsData[foundKey.val].state = "out";
-        writeToEEPROM(foundKey.val, 0);
+        setRGBColor(0, 0, 0);    // Off
       }
-
-      cardsData[foundKey.val].isChanged = true;
-    }
-  } else {
-    //    Serial.println("Value not found!");
+      break;
+      
+    case STATE_WARNING:
+      setRGBColor(255, 165, 0);  // Orange/Yellow
+      break;
+      
+    case STATE_NORMAL:
+      setRGBColor(0, 255, 0);    // Green
+      break;
   }
 }
 
-flag findKeyByValue(String _value) {
-  for (int i = 0; i < mapSize; i++) {
-    if (cardsData[i].val == _value) {
-      digitalWrite(Buzzer, HIGH);
-      return { true, i };
+void setRGBColor(int red, int green, int blue) {
+  analogWrite(RGB_RED_PIN, red);
+  analogWrite(RGB_GREEN_PIN, green);
+  analogWrite(RGB_BLUE_PIN, blue);
+}
+
+// ============================================================================
+// DEBUG FUNCTIONS
+// ============================================================================
+
+void printDebugInfo() {
+  if (!debugMode) return;
+  
+  Serial.println(F("\n========== SENSOR READINGS =========="));
+  Serial.print(F("Timestamp: "));
+  Serial.print(millis() / 1000);
+  Serial.println(F(" seconds"));
+  
+  // Temperature
+  Serial.print(F("Motor Temperature: "));
+  if (motorTemperature > -50) {
+    Serial.print(motorTemperature, 2);
+    Serial.print(F("°C"));
+    if (temperatureAlert) {
+      if (motorTemperature >= TEMP_CRITICAL) {
+        Serial.print(F(" [CRITICAL]"));
+      } else {
+        Serial.print(F(" [WARNING]"));
+      }
+    } else {
+      Serial.print(F(" [NORMAL]"));
     }
+  } else {
+    Serial.print(F("ERROR - Sensor disconnected"));
   }
-  return { false, 0 };
+  Serial.println();
+  
+  // Gas Sensor
+  Serial.print(F("Gas Level (MQ-7): "));
+  Serial.print(gasLevel);
+  Serial.print(F(" | Digital: "));
+  Serial.print(gasDetected ? F("DETECTED") : F("CLEAR"));
+  if (gasAlert) {
+    if (gasLevel >= GAS_CRITICAL) {
+      Serial.print(F(" [CRITICAL]"));
+    } else {
+      Serial.print(F(" [WARNING]"));
+    }
+  } else {
+    Serial.print(F(" [NORMAL]"));
+  }
+  Serial.println();
+  
+  // Flame Sensor
+  Serial.print(F("Flame Sensor: "));
+  Serial.print(flameDetected ? F("FIRE DETECTED!") : F("No fire"));
+  if (flameAlert) {
+    Serial.print(F(" [CRITICAL]"));
+  }
+  Serial.println();
+  
+  // Oil Leak Detection
+  Serial.print(F("Oil Leak - Raindrop: "));
+  Serial.print(oilLeakLevel);
+  Serial.print(F(" | Touch: "));
+  Serial.print(touchDetected ? F("TOUCHED") : F("Not touched"));
+  Serial.print(F(" | Status: "));
+  Serial.print(oilLeakDetected ? F("LEAK DETECTED") : F("No leak"));
+  if (oilLeakAlert) {
+    Serial.print(F(" [WARNING]"));
+  }
+  Serial.println();
+  
+  // System State
+  Serial.print(F("\nSystem State: "));
+  switch (currentState) {
+    case STATE_CRITICAL:
+      Serial.println(F("CRITICAL"));
+      break;
+    case STATE_WARNING:
+      Serial.println(F("WARNING"));
+      break;
+    case STATE_NORMAL:
+      Serial.println(F("NORMAL"));
+      break;
+  }
+  
+  Serial.println(F("=====================================\n"));
+}
+
+// ============================================================================
+// UTILITY FUNCTIONS
+// ============================================================================
+
+// Function to get string representation of system state
+String getStateString() {
+  switch (currentState) {
+    case STATE_CRITICAL:
+      return "CRITICAL";
+    case STATE_WARNING:
+      return "WARNING";
+    case STATE_NORMAL:
+      return "NORMAL";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+// Function to manually test all components (can be called from Serial commands)
+void testAllComponents() {
+  Serial.println(F("\n========== TESTING ALL COMPONENTS =========="));
+  
+  // Test buzzer
+  Serial.println(F("Testing buzzer..."));
+  tone(BUZZER_PIN, 1000, 500);
+  delay(700);
+  
+  // Test RGB LED
+  Serial.println(F("Testing RGB LED..."));
+  setRGBColor(255, 0, 0);
+  delay(500);
+  setRGBColor(0, 255, 0);
+  delay(500);
+  setRGBColor(0, 0, 255);
+  delay(500);
+  setRGBColor(0, 0, 0);
+  
+  // Test LCD
+  Serial.println(F("Testing LCD..."));
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(F("Component Test"));
+  lcd.setCursor(0, 1);
+  lcd.print(F("All Systems"));
+  delay(2000);
+  
+  Serial.println(F("Component test complete!"));
+  Serial.println(F("============================================\n"));
 }
